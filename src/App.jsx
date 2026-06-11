@@ -15,6 +15,10 @@ const SCENE_LETTERS = ['A', 'B'];
 // channel 1 of each scene starts audible so neither side of the fader is black
 const INITIAL_OPACITIES = [1, 0, 0, 0, 1, 0, 0, 0];
 
+// per-channel fx: tilt/hue in degrees (engine takes radians), band routes
+// which global band drives the deck's u_audio_level, amt = response multiplier
+const DEFAULT_FX = { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 };
+
 export default function App() {
   const sceneACanvasRef = useRef(null);
   const sceneBCanvasRef = useRef(null);
@@ -39,6 +43,7 @@ export default function App() {
   const [sizes, setSizes] = useState(() =>
     Array.from({ length: SLOTS }, () => ({ x: 1, y: 1 })),
   );
+  const [fx, setFx] = useState(() => Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
   const [crossfade, setCrossfade] = useState(0);
   const [cueScene, setCueScene] = useState(0);
   const [library, setLibrary] = useState([]);
@@ -81,6 +86,10 @@ export default function App() {
     setCrossfade(value);
   }, []);
 
+  const applyFx = useCallback((slot, key, value) => {
+    setFx((prev) => prev.map((f, i) => (i === slot ? { ...f, [key]: value } : f)));
+  }, []);
+
   // Single sync point for the composite uniforms: a muted channel outputs 0
   // while its fader position is preserved for unmute.
   useEffect(() => {
@@ -89,8 +98,12 @@ export default function App() {
     opacities.forEach((value, i) => engine.setOpacity(i, muted[i] ? 0 : value));
     scales.forEach((value, i) => engine.setScale(i, value));
     sizes.forEach((size, i) => engine.setSize(i, size.x, size.y));
+    fx.forEach((f, i) => {
+      engine.setChannelFx(i, (f.tilt * Math.PI) / 180, f.contrast, (f.hue * Math.PI) / 180, f.sat);
+      engine.setAudioRouting(i, f.band, f.amt);
+    });
     engine.setCrossfade(crossfade);
-  }, [opacities, muted, scales, sizes, crossfade]);
+  }, [opacities, muted, scales, sizes, fx, crossfade]);
 
   useEffect(() => {
     engineRef.current?.setCueScene(cueScene);
@@ -403,6 +416,8 @@ export default function App() {
                   onSizeChange={(ch, axis, v) =>
                     applySize(cueScene * CHANNELS + ch, axis, v)
                   }
+                  fx={fx[slot]}
+                  onFxChange={(ch, key, v) => applyFx(cueScene * CHANNELS + ch, key, v)}
                   onGenerate={handleGenerate}
                   onSave={handleSaveDeck}
                   previewRef={(el) => {

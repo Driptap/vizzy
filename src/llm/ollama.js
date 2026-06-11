@@ -1,3 +1,5 @@
+import { selectRecipe } from './recipes';
+
 export const DEFAULT_ENDPOINT = 'http://localhost:11434/api/generate';
 export const DEFAULT_MODEL = 'qwen2.5-coder';
 
@@ -18,6 +20,8 @@ Additional hard rules:
 - Put brightness and shape into RGB and set gl_FragColor.a to 1.0; alpha is
   treated as a brightness multiplier by the mixer, not as transparency over
   other layers.
+- There are NO texture samplers and no previous-frame buffer — everything must
+  be procedural. Loops must have constant bounds.
 - You may define helper functions, #defines and consts above void main().`;
 
 const REQUEST_TIMEOUT_MS = 120000;
@@ -75,6 +79,14 @@ export class GenerationQueue {
   }
 
   async request(userPrompt) {
+    // Append at most ONE style recipe, and only when the prompt matches —
+    // keeps the local model's context small while raising genre quality.
+    const recipe = selectRecipe(userPrompt);
+    if (recipe) console.log(`[Vizzy] Style recipe matched: ${recipe.title}`);
+    const system = recipe
+      ? `${SYSTEM_PROMPT}\n\n## Style guidance — ${recipe.title}\n${recipe.guidance}`
+      : SYSTEM_PROMPT;
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -84,7 +96,7 @@ export class GenerationQueue {
         signal: controller.signal,
         body: JSON.stringify({
           model: this.getModel(),
-          prompt: `${SYSTEM_PROMPT}\n\nUser request: ${userPrompt}`,
+          prompt: `${system}\n\nUser request: ${userPrompt}`,
           stream: false,
         }),
       });

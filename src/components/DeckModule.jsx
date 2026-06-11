@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Knob } from './Knob';
 
 const STATUS_STYLES = {
   idle: { label: 'Idle', className: 'bg-neutral-700 text-neutral-300' },
@@ -12,6 +13,15 @@ const STATUS_STYLES = {
 
 const BUSY_STATUSES = ['queued', 'generating', 'compiling'];
 
+const TABS = ['XFRM', 'AUDIO', 'COLOR'];
+
+const BANDS = [
+  { id: 'low', label: 'LO' },
+  { id: 'mid', label: 'MID' },
+  { id: 'high', label: 'HI' },
+  { id: 'level', label: 'LVL' },
+];
+
 export function DeckModule({
   index,
   sceneLetter,
@@ -23,11 +33,14 @@ export function DeckModule({
   onScaleChange,
   size,
   onSizeChange,
+  fx,
+  onFxChange,
   onGenerate,
   onSave,
   previewRef,
 }) {
   const [saved, setSaved] = useState(false);
+  const [tab, setTab] = useState('XFRM');
   const badge = STATUS_STYLES[status] || STATUS_STYLES.idle;
   const busy = BUSY_STATUSES.includes(status);
 
@@ -75,55 +88,160 @@ export function DeckModule({
           (letterboxed) — if display height followed the render aspect, tall
           aspects would grow the card, shrink the scene views above, and feed
           back into an even taller aspect until the layout collapsed. */}
-      <canvas
-        ref={previewRef}
-        width={160}
-        height={90}
-        className="aspect-video w-full rounded border border-neutral-800 bg-black object-contain"
-      />
-
-      <div className="flex items-center gap-1.5">
-        <span className="text-[9px] font-bold tracking-wider text-neutral-500">SCALE</span>
-        <input
-          type="range"
-          min="0.25"
-          max="3"
-          step="0.05"
-          value={scale}
-          onChange={(e) => onScaleChange(index, Number(e.target.value))}
-          onDoubleClick={() => onScaleChange(index, 1)}
-          title="Deck zoom (double-click to reset)"
-          className="h-1 min-w-0 flex-1 cursor-pointer accent-cyan-500"
-          aria-label={`Deck ${index + 1} scale`}
+      <div className="flex items-stretch gap-1.5">
+        <canvas
+          ref={previewRef}
+          width={160}
+          height={90}
+          className="aspect-video min-w-0 flex-1 rounded border border-neutral-800 bg-black object-contain"
         />
-        <span className="w-9 text-right font-mono text-[9px] text-neutral-400">
-          {scale.toFixed(2)}x
-        </span>
+        <div className="flex flex-col items-center gap-0.5">
+          <span className="text-[9px] font-bold tracking-wider text-neutral-500">H</span>
+          <input
+            type="range"
+            min="0.05"
+            max="1"
+            step="0.01"
+            value={size.y}
+            onChange={(e) => onSizeChange(index, 'y', Number(e.target.value))}
+            onDoubleClick={() => onSizeChange(index, 'y', 1)}
+            title="Output height on the final canvas (double-click to reset)"
+            className="vert-slider min-h-0 flex-1"
+            aria-label={`Deck ${index + 1} output height`}
+          />
+          <span className="w-7 text-center font-mono text-[9px] text-neutral-400">
+            {Math.round(size.y * 100)}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-1.5">
-        {['x', 'y'].map((axis) => (
-          <div key={axis} className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="text-[9px] font-bold tracking-wider text-neutral-500">
-              {axis === 'x' ? 'W' : 'H'}
-            </span>
-            <input
-              type="range"
-              min="0.05"
-              max="1"
-              step="0.01"
-              value={size[axis]}
-              onChange={(e) => onSizeChange(index, axis, Number(e.target.value))}
-              onDoubleClick={() => onSizeChange(index, axis, 1)}
-              title={`Output ${axis === 'x' ? 'width' : 'height'} on the final canvas (double-click to reset)`}
-              className="h-1 min-w-0 flex-1 cursor-pointer accent-cyan-500"
-              aria-label={`Deck ${index + 1} output ${axis === 'x' ? 'width' : 'height'}`}
-            />
-            <span className="w-7 text-right font-mono text-[9px] text-neutral-400">
-              {Math.round(size[axis] * 100)}%
-            </span>
-          </div>
+        <span className="text-[9px] font-bold tracking-wider text-neutral-500">W</span>
+        <input
+          type="range"
+          min="0.05"
+          max="1"
+          step="0.01"
+          value={size.x}
+          onChange={(e) => onSizeChange(index, 'x', Number(e.target.value))}
+          onDoubleClick={() => onSizeChange(index, 'x', 1)}
+          title="Output width on the final canvas (double-click to reset)"
+          className="h-1 min-w-0 flex-1 cursor-pointer accent-cyan-500"
+          aria-label={`Deck ${index + 1} output width`}
+        />
+        <span className="w-7 text-right font-mono text-[9px] text-neutral-400">
+          {Math.round(size.x * 100)}%
+        </span>
+      </div>
+
+      <div className="flex gap-1">
+        {TABS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className={`rounded px-2 py-0.5 text-[9px] font-bold tracking-wider transition-colors ${
+              tab === t
+                ? 'bg-neutral-700 text-cyan-300'
+                : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            {t}
+          </button>
         ))}
+      </div>
+
+      <div className="flex h-16 items-center justify-evenly">
+        {tab === 'XFRM' && (
+          <>
+            <Knob
+              label="SCALE"
+              value={scale}
+              min={0.25}
+              max={3}
+              defaultValue={1}
+              format={(v) => `${v.toFixed(2)}x`}
+              onChange={(v) => onScaleChange(index, v)}
+            />
+            <Knob
+              label="TILT"
+              value={fx.tilt}
+              min={-180}
+              max={180}
+              defaultValue={0}
+              bipolar
+              format={(v) => `${Math.round(v)}°`}
+              onChange={(v) => onFxChange(index, 'tilt', v)}
+            />
+          </>
+        )}
+
+        {tab === 'AUDIO' && (
+          <>
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex overflow-hidden rounded border border-neutral-700">
+                {BANDS.map((band) => (
+                  <button
+                    key={band.id}
+                    type="button"
+                    onClick={() => onFxChange(index, 'band', band.id)}
+                    title={`Drive this channel's u_audio_level from the ${band.label} band`}
+                    className={`px-1.5 py-1 text-[8px] font-bold transition-colors ${
+                      fx.band === band.id
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    {band.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[8px] font-bold tracking-wider text-neutral-500">BAND</span>
+            </div>
+            <Knob
+              label="AMT"
+              value={fx.amt}
+              min={0}
+              max={2}
+              defaultValue={1}
+              format={(v) => `${v.toFixed(2)}x`}
+              onChange={(v) => onFxChange(index, 'amt', v)}
+            />
+          </>
+        )}
+
+        {tab === 'COLOR' && (
+          <>
+            <Knob
+              label="CON"
+              value={fx.contrast}
+              min={0}
+              max={2}
+              defaultValue={1}
+              format={(v) => v.toFixed(2)}
+              onChange={(v) => onFxChange(index, 'contrast', v)}
+            />
+            <Knob
+              label="HUE"
+              value={fx.hue}
+              min={-180}
+              max={180}
+              defaultValue={0}
+              bipolar
+              format={(v) => `${Math.round(v)}°`}
+              onChange={(v) => onFxChange(index, 'hue', v)}
+            />
+            <Knob
+              label="SAT"
+              value={fx.sat}
+              min={0}
+              max={2}
+              defaultValue={1}
+              format={(v) => v.toFixed(2)}
+              onChange={(v) => onFxChange(index, 'sat', v)}
+            />
+          </>
+        )}
       </div>
 
       <textarea
