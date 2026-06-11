@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://www.sinanguclu.co.uk/vizzy/"><img src="docs/og.png" alt="Vizzy — a toy VJ instrument" width="640"></a>
+</p>
+
 # Vizzy
 
 Local MVP desktop app for live VJing: write text prompts that a local LLM turns
