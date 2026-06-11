@@ -62,6 +62,9 @@ app.whenReady().then(() => {
   ipcMain.handle('vizzy:get-models-dir', () =>
     path.join(app.getPath('userData'), 'models'),
   );
+  ipcMain.handle('vizzy:get-sprites-dir', () =>
+    path.join(app.getPath('userData'), 'sprites'),
+  );
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.includes(permission));

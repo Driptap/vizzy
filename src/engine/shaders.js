@@ -82,6 +82,39 @@ vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx) {
 }
 `;
 
+// Sprite quad: unlike the fullscreen-quad shaders this one respects the mesh
+// transform (scale/rotation/position drive the layout). Distortion is a UV
+// sine wobble, skew a UV shear; samples pushed outside the texture go
+// transparent instead of streaking.
+export const SPRITE_VERTEX = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+export const SPRITE_FRAGMENT = /* glsl */ `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D u_map;
+uniform float u_opacity;
+uniform float u_distort;
+uniform float u_skew;
+uniform float u_time;
+void main() {
+  vec2 uv = vUv;
+  uv.x += u_skew * (uv.y - 0.5);
+  uv += u_distort * 0.08 * vec2(
+    sin(uv.y * 12.0 + u_time * 5.0),
+    sin(uv.x * 10.0 + u_time * 4.0)
+  );
+  vec2 inside = step(vec2(0.0), uv) * step(uv, vec2(1.0));
+  vec4 t = texture2D(u_map, uv);
+  gl_FragColor = vec4(t.rgb, t.a * u_opacity * inside.x * inside.y);
+}
+`;
+
 // Single-deck preview: the deck texture through the SAME transform the
 // composites apply (zoom, footprint window, alpha-as-brightness) so the
 // thumbnail shows what the deck will contribute to the final output —

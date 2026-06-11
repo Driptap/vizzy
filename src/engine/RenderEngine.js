@@ -6,7 +6,15 @@ import {
   SCENE_FRAGMENT,
   COMPOSITE_FRAGMENT,
   PREVIEW_FRAGMENT,
+  SPRITE_VERTEX,
+  SPRITE_FRAGMENT,
 } from './shaders';
+
+// channel automation (sprites AND models): per effect {amt: 0..1, audio: bool}
+// — audio couples the effect to the deck's routed level, otherwise it
+// self-runs on time LFOs
+const makeDefaultAut = () =>
+  Object.fromEntries(['scl', 'rot', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]));
 
 export const CHANNELS = 4; // channels per scene
 export const SCENES = 2; // A (decks 0-3) and B (decks 4-7)
@@ -121,8 +129,11 @@ export class RenderEngine {
       target.texture.wrapS = THREE.MirroredRepeatWrapping;
       target.texture.wrapT = THREE.MirroredRepeatWrapping;
 
-      return { scene, mesh, body, target, mode: 'shader', model: null };
+      return { scene, mesh, body, target, mode: 'shader', model: null, sprite: null };
     });
+
+    this.spriteGeometry = new THREE.PlaneGeometry(1, 1);
+    this.automation = DEFAULT_DECK_BODIES.map(() => makeDefaultAut());
 
     this.modelCamera = new THREE.PerspectiveCamera(
       45,
@@ -300,15 +311,74 @@ export class RenderEngine {
     activeMaterial.dispose();
     deck.body = body;
     this.disposeModel(deck);
+    this.disposeSprite(deck);
     deck.mode = 'shader';
     return { ok: true };
   }
 
+  // Put an image on a deck: centered quad preserving the image's aspect
+  // within the render frame, alpha respected, scale-pulsing with the deck's
+  // routed audio.
+  stageSprite(deckIndex, texture, imageAspect, spriteId) {
+    const deck = this.decks[deckIndex];
+    // pre-upload the image to the GPU so the swap frame doesn't hitch
+    this.renderer.initTexture(texture);
+    this.disposeModel(deck);
+    this.disposeSprite(deck);
+
+    const mesh = new THREE.Mesh(
+      this.spriteGeometry,
+      new THREE.ShaderMaterial({
+        uniforms: {
+          u_map: { value: texture },
+          u_opacity: { value: 1 },
+          u_distort: { value: 0 },
+          u_skew: { value: 0 },
+          u_time: { value: 0 },
+        },
+        vertexShader: SPRITE_VERTEX,
+        fragmentShader: SPRITE_FRAGMENT,
+        transparent: true,
+      }),
+    );
+    mesh.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(mesh);
+
+    deck.sprite = { scene, mesh, spriteId, imageAspect, baseW: 1, baseH: 1, spin: 0 };
+    this.updateSpriteLayout(deck);
+    deck.mode = 'sprite';
+    return { ok: true };
+  }
+
+  // The ortho camera spans the full target, so quad units stretch by the
+  // render aspect — divide it back out and contain-fit to ~85% of the frame.
+  updateSpriteLayout(deck) {
+    if (!deck.sprite) return;
+    const relative = deck.sprite.imageAspect / (this.aspectUniform.value || 1);
+    const h = Math.min(1.7, 1.7 / relative);
+    deck.sprite.baseW = h * relative;
+    deck.sprite.baseH = h;
+  }
+
+  disposeSprite(deck) {
+    if (!deck.sprite) return;
+    deck.sprite.mesh.material.uniforms.u_map.value?.dispose();
+    deck.sprite.mesh.material.dispose();
+    deck.sprite = null;
+  }
+
+  setAutomation(deckIndex, aut) {
+    this.automation[deckIndex] = aut;
+  }
+
   // Put a loaded 3D object on a deck: auto-centered and normalized to the
   // camera, lit, slowly rotating, scale-pulsing with the deck's routed audio.
-  stageModel(deckIndex, object3D, modelId) {
+  // Async on purpose: shaders are pre-compiled in parallel and buffers
+  // pre-uploaded BEFORE the swap, so the running visuals never stall on the
+  // first frame of a new model. The old content keeps playing until ready.
+  async stageModel(deckIndex, object3D, modelId) {
     const deck = this.decks[deckIndex];
-    this.disposeModel(deck);
 
     const box = new THREE.Box3().setFromObject(object3D);
     const sizeVec = box.getSize(new THREE.Vector3());
@@ -331,7 +401,24 @@ export class RenderEngine {
     rim.position.set(-3, -1, -2);
     scene.add(rim);
 
-    deck.model = { scene, group, modelId, baseScale };
+    // 1) parallel (non-blocking) shader compilation for all the file's materials
+    try {
+      if (this.renderer.compileAsync) {
+        await this.renderer.compileAsync(scene, this.modelCamera);
+      }
+    } catch (err) {
+      // worst case the first visible frame compiles inline, as before
+      console.warn('[Vizzy] Async shader compile failed, continuing:', err);
+    }
+    // 2) one warm-up render to the scratch target uploads geometry + textures
+    this.renderer.setRenderTarget(this.previewTarget);
+    this.renderer.render(scene, this.modelCamera);
+    this.renderer.setRenderTarget(null);
+
+    // ready — swap atomically (old model/sprite disposed only now)
+    this.disposeModel(deck);
+    this.disposeSprite(deck);
+    deck.model = { scene, group, modelId, baseScale, spin: 0 };
     deck.mode = 'model';
     return { ok: true };
   }
@@ -364,6 +451,9 @@ export class RenderEngine {
     const deck = this.decks[deckIndex];
     if (deck.mode === 'model' && deck.model) {
       return { type: 'model', modelId: deck.model.modelId };
+    }
+    if (deck.mode === 'sprite' && deck.sprite) {
+      return { type: 'sprite', spriteId: deck.sprite.spriteId };
     }
     return { type: 'shader', code: deck.body };
   }
@@ -421,6 +511,7 @@ export class RenderEngine {
     this.aspectUniform.value = this.deckWidth / this.deckHeight;
     this.modelCamera.aspect = this.aspectUniform.value;
     this.modelCamera.updateProjectionMatrix();
+    this.decks.forEach((deck) => this.updateSpriteLayout(deck));
 
     this.decks.forEach((deck) => {
       deck.target.setSize(this.deckWidth, this.deckHeight);
@@ -503,14 +594,62 @@ export class RenderEngine {
 
     this.sharedUniforms.u_resolution.value.set(this.deckWidth, this.deckHeight);
     const t = this.sharedUniforms.u_time.value;
+    const dt = Math.min(0.1, t - (this.lastFrameTime ?? t));
+    this.lastFrameTime = t;
     this.decks.forEach((deck, i) => {
       this.renderer.setRenderTarget(deck.target);
       if (deck.mode === 'model' && deck.model) {
+        const model = deck.model;
+        const aut = this.automation[i];
         const level = this.deckAudioUniforms[i].u_audio_level.value;
-        deck.model.group.rotation.y = t * 0.5;
-        deck.model.group.rotation.x = Math.sin(t * 0.3) * 0.2;
-        deck.model.group.scale.setScalar(deck.model.baseScale * (1 + level * 0.25));
-        this.renderer.render(deck.model.scene, this.modelCamera);
+
+        // ROT adds spin on top of a gentle always-on base rotation
+        model.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
+        const pulse =
+          1 + aut.scl.amt * 0.5 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
+        // DST = jelly squash-and-stretch (material-agnostic "distortion")
+        const wobble =
+          aut.dst.amt * 0.35 * (aut.dst.audio ? level : 0.6 + 0.4 * Math.sin(t * 1.3));
+
+        model.group.rotation.y = t * 0.3 + model.spin;
+        model.group.rotation.x = Math.sin(t * 0.3) * 0.2;
+        // SKW = side lean (true shear isn't expressible in TRS transforms)
+        model.group.rotation.z =
+          aut.skw.amt * 0.5 * (aut.skw.audio ? level : Math.sin(t * 0.9));
+        model.group.scale.set(
+          model.baseScale * pulse * (1 + wobble * Math.sin(t * 7.0)),
+          model.baseScale * pulse * (1 - wobble * Math.sin(t * 7.0 + 1.0)),
+          model.baseScale * pulse * (1 + wobble * Math.cos(t * 6.0)),
+        );
+        // FLK = whole-frame blink (works regardless of imported materials)
+        model.group.visible = !(
+          aut.flk.amt > 0 &&
+          Math.random() <
+            aut.flk.amt * (aut.flk.audio ? Math.min(1, level * 1.5) : 1) * 0.5
+        );
+
+        this.renderer.render(model.scene, this.modelCamera);
+      } else if (deck.mode === 'sprite' && deck.sprite) {
+        const sprite = deck.sprite;
+        const aut = this.automation[i];
+        const level = this.deckAudioUniforms[i].u_audio_level.value;
+
+        const pulse =
+          1 + aut.scl.amt * 0.6 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
+        sprite.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
+
+        sprite.mesh.scale.set(sprite.baseW * pulse, sprite.baseH * pulse, 1);
+        sprite.mesh.position.y = Math.sin(t * 0.8) * 0.04;
+        sprite.mesh.rotation.z = sprite.spin;
+
+        const u = sprite.mesh.material.uniforms;
+        u.u_time.value = t;
+        u.u_opacity.value =
+          1 - aut.flk.amt * (aut.flk.audio ? Math.min(1, level * 1.5) : 1) * Math.random();
+        u.u_distort.value = aut.dst.amt * (aut.dst.audio ? level : 0.6 + 0.4 * Math.sin(t * 1.3));
+        u.u_skew.value = aut.skw.amt * 0.7 * (aut.skw.audio ? level : Math.sin(t * 0.9));
+
+        this.renderer.render(sprite.scene, this.camera);
       } else {
         this.renderer.render(deck.scene, this.camera);
       }
@@ -579,7 +718,9 @@ export class RenderEngine {
       deck.mesh.material.dispose();
       deck.target.dispose();
       this.disposeModel(deck);
+      this.disposeSprite(deck);
     });
+    this.spriteGeometry.dispose();
     this.previewTarget.dispose();
     this.sceneComposites.forEach((scene) => scene.children[0]?.material.dispose());
     this.masterComposite.children[0]?.material.dispose();

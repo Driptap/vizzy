@@ -12,9 +12,19 @@ import {
   listShaders,
   saveShader,
   saveDeck,
+  saveModel,
+  getModelFilePath,
+  saveSprite,
+  getSpriteFilePath,
+  filePathOf,
   renameShader,
+  updateEntry,
   deleteEntry,
 } from './lib/shaderLibrary';
+import { loadModelObject } from './lib/modelLoader';
+import { loadSpriteTexture, makeSpriteThumbnail } from './lib/spriteLoader';
+
+const isShaderEntry = (e) => !e.kind;
 
 const SLOTS = CHANNELS * 2; // scene A: 0-3, scene B: 4-7
 const SCENE_LETTERS = ['A', 'B'];
@@ -24,6 +34,11 @@ const INITIAL_OPACITIES = [1, 0, 0, 0, 1, 0, 0, 0];
 // per-channel fx: tilt/hue in degrees (engine takes radians), band routes
 // which global band drives the deck's u_audio_level, amt = response multiplier
 const DEFAULT_FX = { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 };
+
+// sprite automation: per effect {amt, audio} — see RenderEngine sprite branch
+const AUT_KEYS = ['scl', 'rot', 'flk', 'dst', 'skw'];
+const makeDefaultAut = () =>
+  Object.fromEntries(AUT_KEYS.map((k) => [k, { amt: 0, audio: false }]));
 
 export default function App() {
   const sceneACanvasRef = useRef(null);
@@ -50,6 +65,8 @@ export default function App() {
     Array.from({ length: SLOTS }, () => ({ x: 1, y: 1 })),
   );
   const [fx, setFx] = useState(() => Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
+  const [aut, setAut] = useState(() => Array.from({ length: SLOTS }, makeDefaultAut));
+  const [sourceTypes, setSourceTypes] = useState(() => Array(SLOTS).fill('shader'));
   const [crossfade, setCrossfade] = useState(0);
   const [cueScene, setCueScene] = useState(0);
   const [library, setLibrary] = useState([]);
@@ -96,6 +113,18 @@ export default function App() {
     setFx((prev) => prev.map((f, i) => (i === slot ? { ...f, [key]: value } : f)));
   }, []);
 
+  const applyAut = useCallback((slot, effect, field, value) => {
+    setAut((prev) =>
+      prev.map((a, i) =>
+        i === slot ? { ...a, [effect]: { ...a[effect], [field]: value } } : a,
+      ),
+    );
+  }, []);
+
+  const setSourceType = useCallback((slot, type) => {
+    setSourceTypes((prev) => prev.map((s, i) => (i === slot ? type : s)));
+  }, []);
+
   // Single sync point for the composite uniforms: a muted channel outputs 0
   // while its fader position is preserved for unmute.
   useEffect(() => {
@@ -108,8 +137,9 @@ export default function App() {
       engine.setChannelFx(i, (f.tilt * Math.PI) / 180, f.contrast, (f.hue * Math.PI) / 180, f.sat);
       engine.setAudioRouting(i, f.band, f.amt);
     });
+    aut.forEach((a, i) => engine.setAutomation(i, a));
     engine.setCrossfade(crossfade);
-  }, [opacities, muted, scales, sizes, fx, crossfade]);
+  }, [opacities, muted, scales, sizes, fx, aut, crossfade]);
 
   useEffect(() => {
     engineRef.current?.setCueScene(cueScene);
@@ -236,11 +266,13 @@ export default function App() {
         }
         setDeckState(slot, 'compiling');
         const result = engineRef.current.stageShader(slot, code);
-        if (result.ok) setDeckState(slot, 'active');
-        else setDeckState(slot, 'failed', result.error);
+        if (result.ok) {
+          setDeckState(slot, 'active');
+          setSourceType(slot, 'shader');
+        } else setDeckState(slot, 'failed', result.error);
       });
     },
-    [setDeckState, cueScene],
+    [setDeckState, setSourceType, cueScene],
   );
 
   const handleSaveDeck = useCallback(
@@ -248,6 +280,8 @@ export default function App() {
       const engine = engineRef.current;
       if (!engine) return;
       const slot = cueScene * CHANNELS + channel;
+      // model/sprite channels have no shader to save; they're already library entries
+      if (engine.getChannelSource(slot).type !== 'shader') return;
       try {
         const entry = await saveShader({
           code: engine.getShaderBody(slot),
@@ -261,14 +295,95 @@ export default function App() {
     [cueScene],
   );
 
+  const handleAddModels = useCallback(async (files) => {
+    try {
+      const added = [];
+      for (const file of files) {
+        const sourcePath = filePathOf(file);
+        const name = file.name.replace(/\.[^.]+$/, '');
+        // eslint-disable-next-line no-await-in-loop
+        added.push(await saveModel({ sourcePath, name }));
+      }
+      setLibrary((prev) => [...added, ...prev]);
+    } catch (err) {
+      console.error('[Vizzy] Adding model failed:', err);
+    }
+  }, []);
+
+  const handleAddSprites = useCallback(async (files) => {
+    try {
+      const added = [];
+      for (const file of files) {
+        const sourcePath = filePathOf(file);
+        const name = file.name.replace(/\.[^.]+$/, '');
+        // eslint-disable-next-line no-await-in-loop
+        const screenshot = await makeSpriteThumbnail(sourcePath);
+        // eslint-disable-next-line no-await-in-loop
+        added.push(await saveSprite({ sourcePath, name, screenshot }));
+      }
+      setLibrary((prev) => [...added, ...prev]);
+    } catch (err) {
+      console.error('[Vizzy] Adding sprite failed:', err);
+    }
+  }, []);
+
+  const handleAssignSprite = useCallback(
+    async (entry, channel) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const slot = cueScene * CHANNELS + channel;
+      setDeckState(slot, 'compiling');
+      try {
+        const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(entry));
+        engine.stageSprite(slot, texture, aspect, entry.id);
+        setDeckState(slot, 'active');
+        setSourceType(slot, 'sprite');
+      } catch (err) {
+        console.error('[Vizzy] Loading sprite failed:', err);
+        setDeckState(slot, 'failed', err.message || 'Image load failed');
+      }
+    },
+    [cueScene, setDeckState, setSourceType],
+  );
+
+  const handleAssignModel = useCallback(
+    async (entry, channel) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const slot = cueScene * CHANNELS + channel;
+      setDeckState(slot, 'compiling');
+      try {
+        const object = await loadModelObject(await getModelFilePath(entry));
+        await engine.stageModel(slot, object, entry.id);
+        setDeckState(slot, 'active');
+        setSourceType(slot, 'model');
+        // first assign captures a thumbnail once the preview has the model
+        if (!entry.screenshot) {
+          setTimeout(async () => {
+            const shot = engineRef.current?.getPreviewDataURL(channel);
+            if (!shot) return;
+            const updated = await updateEntry({ ...entry, screenshot: shot });
+            setLibrary((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+          }, 700);
+        }
+      } catch (err) {
+        console.error('[Vizzy] Loading model failed:', err);
+        setDeckState(slot, 'failed', err.message || 'Model load failed');
+      }
+    },
+    [cueScene, setDeckState, setSourceType],
+  );
+
   const handleAddToChannel = useCallback(
     (entry, channel) => {
       const slot = cueScene * CHANNELS + channel;
       const result = engineRef.current?.stageShader(slot, entry.code);
-      if (result?.ok) setDeckState(slot, 'active');
-      else setDeckState(slot, 'failed', result?.error || 'Compile failed');
+      if (result?.ok) {
+        setDeckState(slot, 'active');
+        setSourceType(slot, 'shader');
+      } else setDeckState(slot, 'failed', result?.error || 'Compile failed');
     },
-    [setDeckState, cueScene],
+    [setDeckState, setSourceType, cueScene],
   );
 
   // Save the cued scene as a deck preset. Channels whose shader code isn't in
@@ -283,31 +398,41 @@ export default function App() {
       const channels = [];
       for (let ch = 0; ch < CHANNELS; ch += 1) {
         const slot = scene * CHANNELS + ch;
-        const code = engine.getShaderBody(slot);
-        let shaderEntry =
-          library.find((e) => e.kind !== 'deck' && e.code === code) ||
-          newShaders.find((e) => e.code === code);
-        if (!shaderEntry) {
-          // eslint-disable-next-line no-await-in-loop
-          shaderEntry = await saveShader({ code, screenshot: engine.getPreviewDataURL(ch) });
-          newShaders.push(shaderEntry);
-        }
-        channels.push({
-          shaderId: shaderEntry.id,
+        const config = {
           prompt: prompts[slot],
           opacity: opacities[slot],
           muted: muted[slot],
           scale: scales[slot],
           size: { ...sizes[slot] },
           fx: { ...fx[slot] },
-        });
+          aut: structuredClone(aut[slot]),
+        };
+        const source = engine.getChannelSource(slot);
+        if (source.type === 'model') {
+          channels.push({ modelId: source.modelId, ...config });
+        } else if (source.type === 'sprite') {
+          channels.push({ spriteId: source.spriteId, ...config });
+        } else {
+          let shaderEntry =
+            library.find((e) => isShaderEntry(e) && e.code === source.code) ||
+            newShaders.find((e) => e.code === source.code);
+          if (!shaderEntry) {
+            // eslint-disable-next-line no-await-in-loop
+            shaderEntry = await saveShader({
+              code: source.code,
+              screenshot: engine.getPreviewDataURL(ch),
+            });
+            newShaders.push(shaderEntry);
+          }
+          channels.push({ shaderId: shaderEntry.id, ...config });
+        }
       }
       const deckEntry = await saveDeck({ channels, screenshot: engine.getSceneDataURL(scene) });
       setLibrary((prev) => [deckEntry, ...newShaders, ...prev]);
     } catch (err) {
       console.error('[Vizzy] Saving deck preset failed:', err);
     }
-  }, [cueScene, library, prompts, opacities, muted, scales, sizes, fx]);
+  }, [cueScene, library, prompts, opacities, muted, scales, sizes, fx, aut]);
 
   // Load a deck preset into scene A or B: stage all 4 shaders and restore
   // each channel's config; the sync effect pushes it to the engine.
@@ -315,19 +440,53 @@ export default function App() {
     (entry, scene) => {
       const engine = engineRef.current;
       if (!engine) return;
-      const shaderById = new Map(
-        library.filter((e) => e.kind !== 'deck').map((e) => [e.id, e]),
-      );
-      entry.channels.forEach((cfg, ch) => {
+      const byId = new Map(library.map((e) => [e.id, e]));
+      entry.channels.forEach(async (cfg, ch) => {
         const slot = scene * CHANNELS + ch;
-        const shader = shaderById.get(cfg.shaderId);
+        if (cfg.modelId) {
+          const model = byId.get(cfg.modelId);
+          if (!model) {
+            setDeckState(slot, 'failed', 'Saved model is missing from the library');
+            return;
+          }
+          setDeckState(slot, 'compiling');
+          try {
+            const object = await loadModelObject(await getModelFilePath(model));
+            await engine.stageModel(slot, object, model.id);
+            setDeckState(slot, 'active');
+            setSourceType(slot, 'model');
+          } catch (err) {
+            setDeckState(slot, 'failed', err.message || 'Model load failed');
+          }
+          return;
+        }
+        if (cfg.spriteId) {
+          const sprite = byId.get(cfg.spriteId);
+          if (!sprite) {
+            setDeckState(slot, 'failed', 'Saved sprite is missing from the library');
+            return;
+          }
+          setDeckState(slot, 'compiling');
+          try {
+            const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(sprite));
+            engine.stageSprite(slot, texture, aspect, sprite.id);
+            setDeckState(slot, 'active');
+            setSourceType(slot, 'sprite');
+          } catch (err) {
+            setDeckState(slot, 'failed', err.message || 'Image load failed');
+          }
+          return;
+        }
+        const shader = byId.get(cfg.shaderId);
         if (!shader) {
           setDeckState(slot, 'failed', 'Saved shader is missing from the library');
           return;
         }
         const result = engine.stageShader(slot, shader.code);
-        if (result?.ok) setDeckState(slot, 'active');
-        else setDeckState(slot, 'failed', result?.error || 'Compile failed');
+        if (result?.ok) {
+          setDeckState(slot, 'active');
+          setSourceType(slot, 'shader');
+        } else setDeckState(slot, 'failed', result?.error || 'Compile failed');
       });
 
       const forScene = (prev, getValue) =>
@@ -341,14 +500,24 @@ export default function App() {
       setScales((prev) => forScene(prev, (c, v) => c.scale ?? v));
       setSizes((prev) => forScene(prev, (c, v) => (c.size ? { ...c.size } : v)));
       setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
+      setAut((prev) =>
+        forScene(prev, (c, v) =>
+          c.aut ? { ...makeDefaultAut(), ...structuredClone(c.aut) } : v,
+        ),
+      );
       setPrompts((prev) => forScene(prev, (c, v) => c.prompt ?? v));
     },
-    [library, setDeckState],
+    [library, setDeckState, setSourceType],
   );
 
   const handleDeleteShader = useCallback(async (id) => {
     await deleteEntry({ id });
     setLibrary((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
+  const handleDeleteEntry = useCallback(async (entry) => {
+    await deleteEntry(entry);
+    setLibrary((prev) => prev.filter((e) => e.id !== entry.id));
   }, []);
 
   const handleRenameShader = useCallback(async (entry, name) => {
@@ -440,12 +609,18 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <LibraryPanel
           open={libraryOpen}
-          shaders={library.filter((e) => e.kind !== 'deck')}
+          shaders={library.filter(isShaderEntry)}
           decks={library.filter((e) => e.kind === 'deck')}
+          models={library.filter((e) => e.kind === 'model')}
+          sprites={library.filter((e) => e.kind === 'sprite')}
           sceneLetter={sceneLetter}
           onSaveDeck={handleSaveDeckScene}
           onAssignDeck={handleAssignDeck}
-          onDelete={handleDeleteShader}
+          onAddModels={handleAddModels}
+          onAssignModel={handleAssignModel}
+          onAddSprites={handleAddSprites}
+          onAssignSprite={handleAssignSprite}
+          onDelete={handleDeleteEntry}
           onRename={handleRenameShader}
           onAddToChannel={handleAddToChannel}
         />
@@ -502,6 +677,11 @@ export default function App() {
                   }
                   fx={fx[slot]}
                   onFxChange={(ch, key, v) => applyFx(cueScene * CHANNELS + ch, key, v)}
+                  sourceType={sourceTypes[slot]}
+                  aut={aut[slot]}
+                  onAutChange={(ch, effect, field, v) =>
+                    applyAut(cueScene * CHANNELS + ch, effect, field, v)
+                  }
                   onGenerate={handleGenerate}
                   onSave={handleSaveDeck}
                   previewRef={(el) => {

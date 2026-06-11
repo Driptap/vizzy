@@ -28,6 +28,18 @@ function modelsDir() {
   return modelsDirPromise;
 }
 
+let spritesDirPromise = null;
+
+function spritesDir() {
+  if (!spritesDirPromise) {
+    spritesDirPromise = ipcRenderer.invoke('vizzy:get-sprites-dir').then(async (dir) => {
+      await fs.mkdir(dir, { recursive: true });
+      return dir;
+    });
+  }
+  return spritesDirPromise;
+}
+
 // Absolute path of a dropped/picked File (File.path was removed in Electron)
 export function filePathOf(file) {
   return webUtils.getPathForFile(file);
@@ -105,6 +117,23 @@ export async function getModelFilePath(entry) {
   return path.join(dir, entry.file);
 }
 
+/** A sprite entry: an image file copied into <userData>/sprites/. */
+export async function saveSprite({ sourcePath, name = '', screenshot = null }) {
+  const dir = await spritesDir();
+  const ext = path.extname(sourcePath).toLowerCase();
+  const id = `sprite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const file = `${id}${ext}`;
+  await fs.copyFile(sourcePath, path.join(dir, file));
+  const entry = { id, kind: 'sprite', name, file, screenshot, createdAt: Date.now() };
+  await writeEntry(entry);
+  return entry;
+}
+
+export async function getSpriteFilePath(entry) {
+  const dir = await spritesDir();
+  return path.join(dir, entry.file);
+}
+
 export async function renameShader(entry, name) {
   const updated = { ...entry, name };
   await writeEntry(updated);
@@ -119,8 +148,8 @@ export async function updateEntry(entry) {
 export async function deleteEntry(entry) {
   const dir = await shadersDir();
   await fs.unlink(path.join(dir, `${entry.id}.json`)).catch(() => {});
-  if (entry.kind === 'model' && entry.file) {
-    const mDir = await modelsDir();
-    await fs.unlink(path.join(mDir, entry.file)).catch(() => {});
+  if (entry.file && (entry.kind === 'model' || entry.kind === 'sprite')) {
+    const assetDir = entry.kind === 'model' ? await modelsDir() : await spritesDir();
+    await fs.unlink(path.join(assetDir, entry.file)).catch(() => {});
   }
 }
