@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Vizzy — live VJ tool: LLM-generated GLSL shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled",
   "author": "Driptap",
+  "license": "MIT",
   "homepage": "https://driptap.github.io/vizzy/",
   "private": true,
   "main": "electron/main.cjs",
