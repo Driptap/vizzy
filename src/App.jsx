@@ -13,7 +13,7 @@ import {
   saveShader,
   saveDeck,
   renameShader,
-  deleteShader,
+  deleteEntry,
 } from './lib/shaderLibrary';
 
 const SLOTS = CHANNELS * 2; // scene A: 0-3, scene B: 4-7
@@ -347,7 +347,7 @@ export default function App() {
   );
 
   const handleDeleteShader = useCallback(async (id) => {
-    await deleteShader(id);
+    await deleteEntry({ id });
     setLibrary((prev) => prev.filter((e) => e.id !== id));
   }, []);
 
