@@ -276,8 +276,10 @@
   </section>
 
   <p class="fineprint">
-    Builds are fresh off CI and unsigned — macOS will sulk the first time:
-    right-click the app → Open (or <code>xattr -dr com.apple.quarantine Vizzy.app</code>).
+    Builds are fresh off CI and unsigned, so macOS will claim Vizzy "is damaged
+    and can't be opened" — it isn't. Drag Vizzy.app to Applications, then run
+    <code>xattr -dr com.apple.quarantine /Applications/Vizzy.app</code> once and
+    it opens forever after.
     This very background is a GLSL shader — that's the kind of thing Vizzy makes all night.
   </p>
 </main>

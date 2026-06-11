@@ -60,5 +60,5 @@ jobs:
           gh release delete latest --cleanup-tag --yes || true
           gh release create latest builds/* \
             --title "Latest build" \
-            --notes "Automated build of ${{ github.sha }}. Unsigned binaries — on macOS, right-click → Open the first time (or run: xattr -dr com.apple.quarantine Vizzy.app)." \
+            --notes "Automated build of ${{ github.sha }}. Unsigned binaries — macOS will say Vizzy 'is damaged and can't be opened'. It isn't: move Vizzy.app to Applications, then run: xattr -dr com.apple.quarantine /Applications/Vizzy.app" \
             --latest
