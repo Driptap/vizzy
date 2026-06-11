@@ -8,7 +8,13 @@ import { TopBar } from './components/TopBar';
 import { DeckModule } from './components/DeckModule';
 import { Mixer } from './components/Mixer';
 import { LibraryPanel } from './components/LibraryPanel';
-import { listShaders, saveShader, renameShader, deleteShader } from './lib/shaderLibrary';
+import {
+  listShaders,
+  saveShader,
+  saveDeck,
+  renameShader,
+  deleteShader,
+} from './lib/shaderLibrary';
 
 const SLOTS = CHANNELS * 2; // scene A: 0-3, scene B: 4-7
 const SCENE_LETTERS = ['A', 'B'];
@@ -265,6 +271,81 @@ export default function App() {
     [setDeckState, cueScene],
   );
 
+  // Save the cued scene as a deck preset. Channels whose shader code isn't in
+  // the library yet get saved as (unnamed) shader entries first; the deck
+  // references shaders by id and carries each channel's full config.
+  const handleSaveDeckScene = useCallback(async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const scene = cueScene;
+    try {
+      const newShaders = [];
+      const channels = [];
+      for (let ch = 0; ch < CHANNELS; ch += 1) {
+        const slot = scene * CHANNELS + ch;
+        const code = engine.getShaderBody(slot);
+        let shaderEntry =
+          library.find((e) => e.kind !== 'deck' && e.code === code) ||
+          newShaders.find((e) => e.code === code);
+        if (!shaderEntry) {
+          // eslint-disable-next-line no-await-in-loop
+          shaderEntry = await saveShader({ code, screenshot: engine.getPreviewDataURL(ch) });
+          newShaders.push(shaderEntry);
+        }
+        channels.push({
+          shaderId: shaderEntry.id,
+          prompt: prompts[slot],
+          opacity: opacities[slot],
+          muted: muted[slot],
+          scale: scales[slot],
+          size: { ...sizes[slot] },
+          fx: { ...fx[slot] },
+        });
+      }
+      const deckEntry = await saveDeck({ channels, screenshot: engine.getSceneDataURL(scene) });
+      setLibrary((prev) => [deckEntry, ...newShaders, ...prev]);
+    } catch (err) {
+      console.error('[Vizzy] Saving deck preset failed:', err);
+    }
+  }, [cueScene, library, prompts, opacities, muted, scales, sizes, fx]);
+
+  // Load a deck preset into scene A or B: stage all 4 shaders and restore
+  // each channel's config; the sync effect pushes it to the engine.
+  const handleAssignDeck = useCallback(
+    (entry, scene) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const shaderById = new Map(
+        library.filter((e) => e.kind !== 'deck').map((e) => [e.id, e]),
+      );
+      entry.channels.forEach((cfg, ch) => {
+        const slot = scene * CHANNELS + ch;
+        const shader = shaderById.get(cfg.shaderId);
+        if (!shader) {
+          setDeckState(slot, 'failed', 'Saved shader is missing from the library');
+          return;
+        }
+        const result = engine.stageShader(slot, shader.code);
+        if (result?.ok) setDeckState(slot, 'active');
+        else setDeckState(slot, 'failed', result?.error || 'Compile failed');
+      });
+
+      const forScene = (prev, getValue) =>
+        prev.map((value, i) => {
+          if (Math.floor(i / CHANNELS) !== scene) return value;
+          const cfg = entry.channels[i % CHANNELS];
+          return cfg ? getValue(cfg, value) : value;
+        });
+      setOpacities((prev) => forScene(prev, (c, v) => c.opacity ?? v));
+      setMuted((prev) => forScene(prev, (c, v) => c.muted ?? v));
+      setScales((prev) => forScene(prev, (c, v) => c.scale ?? v));
+      setSizes((prev) => forScene(prev, (c, v) => (c.size ? { ...c.size } : v)));
+      setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
+      setPrompts((prev) => forScene(prev, (c, v) => c.prompt ?? v));
+    },
+    [library, setDeckState],
+  );
+
   const handleDeleteShader = useCallback(async (id) => {
     await deleteShader(id);
     setLibrary((prev) => prev.filter((e) => e.id !== id));
@@ -359,8 +440,11 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <LibraryPanel
           open={libraryOpen}
-          shaders={library}
+          shaders={library.filter((e) => e.kind !== 'deck')}
+          decks={library.filter((e) => e.kind === 'deck')}
           sceneLetter={sceneLetter}
+          onSaveDeck={handleSaveDeckScene}
+          onAssignDeck={handleAssignDeck}
           onDelete={handleDeleteShader}
           onRename={handleRenameShader}
           onAddToChannel={handleAddToChannel}

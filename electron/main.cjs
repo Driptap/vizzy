@@ -59,6 +59,9 @@ app.whenReady().then(() => {
   ipcMain.handle('vizzy:get-shaders-dir', () =>
     path.join(app.getPath('userData'), 'shaders'),
   );
+  ipcMain.handle('vizzy:get-models-dir', () =>
+    path.join(app.getPath('userData'), 'models'),
+  );
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.includes(permission));

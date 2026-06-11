@@ -1,11 +1,12 @@
 // File-backed shader library: one JSON file per shader in <userData>/shaders/.
 // window.require reaches Electron's node integration directly, bypassing the
 // Vite bundler (these modules don't exist in a browser build).
-const { ipcRenderer } = window.require('electron');
+const { ipcRenderer, webUtils } = window.require('electron');
 const fs = window.require('fs/promises');
 const path = window.require('path');
 
 let dirPromise = null;
+let modelsDirPromise = null;
 
 function shadersDir() {
   if (!dirPromise) {
@@ -15,6 +16,21 @@ function shadersDir() {
     });
   }
   return dirPromise;
+}
+
+function modelsDir() {
+  if (!modelsDirPromise) {
+    modelsDirPromise = ipcRenderer.invoke('vizzy:get-models-dir').then(async (dir) => {
+      await fs.mkdir(dir, { recursive: true });
+      return dir;
+    });
+  }
+  return modelsDirPromise;
+}
+
+// Absolute path of a dropped/picked File (File.path was removed in Electron)
+export function filePathOf(file) {
+  return webUtils.getPathForFile(file);
 }
 
 async function writeEntry(entry) {
@@ -51,13 +67,60 @@ export async function saveShader({ name = '', code, screenshot = null }) {
   return entry;
 }
 
+/**
+ * A deck preset: a whole scene's 4 channels. Each channel references a saved
+ * shader by id and carries the channel config (opacity, mute, scale, size,
+ * fx, prompt). Stored in the same folder, distinguished by kind: 'deck'.
+ */
+export async function saveDeck({ name = '', channels, screenshot = null }) {
+  const entry = {
+    id: `deck-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'deck',
+    name,
+    channels,
+    screenshot,
+    createdAt: Date.now(),
+  };
+  await writeEntry(entry);
+  return entry;
+}
+
+/**
+ * A model entry: the source file is COPIED into <userData>/models/ so the
+ * library owns its assets; the JSON entry (kind: 'model') references it.
+ */
+export async function saveModel({ sourcePath, name = '' }) {
+  const dir = await modelsDir();
+  const ext = path.extname(sourcePath).toLowerCase();
+  const id = `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const file = `${id}${ext}`;
+  await fs.copyFile(sourcePath, path.join(dir, file));
+  const entry = { id, kind: 'model', name, file, screenshot: null, createdAt: Date.now() };
+  await writeEntry(entry);
+  return entry;
+}
+
+export async function getModelFilePath(entry) {
+  const dir = await modelsDir();
+  return path.join(dir, entry.file);
+}
+
 export async function renameShader(entry, name) {
   const updated = { ...entry, name };
   await writeEntry(updated);
   return updated;
 }
 
-export async function deleteShader(id) {
+export async function updateEntry(entry) {
+  await writeEntry(entry);
+  return entry;
+}
+
+export async function deleteEntry(entry) {
   const dir = await shadersDir();
-  await fs.unlink(path.join(dir, `${id}.json`)).catch(() => {});
+  await fs.unlink(path.join(dir, `${entry.id}.json`)).catch(() => {});
+  if (entry.kind === 'model' && entry.file) {
+    const mDir = await modelsDir();
+    await fs.unlink(path.join(mDir, entry.file)).catch(() => {});
+  }
 }
