@@ -126,6 +126,51 @@
   .links a { color: var(--cyan); }
   .links a:hover { color: var(--acid); }
 
+  .setup {
+    margin-top: 2.8rem;
+    width: min(46rem, 100%);
+    text-align: left;
+    background: rgba(7,6,12,.78); backdrop-filter: blur(4px);
+    border: 1px solid rgba(43,245,255,.35);
+    border-radius: .6em;
+    overflow: hidden;
+    animation: rise .7s .68s both;
+  }
+  .setup header {
+    font-family: "Bungee", cursive;
+    font-size: .8rem; letter-spacing: .12em;
+    color: var(--bg);
+    background: var(--cyan);
+    padding: .55em 1em;
+  }
+  .setup ol {
+    list-style: none; counter-reset: step;
+    padding: 1.1em 1.2em 1.2em;
+    display: grid; gap: 1em;
+  }
+  .setup li { counter-increment: step; font-size: .82rem; line-height: 1.65; }
+  .setup li::before {
+    content: "0" counter(step);
+    font-family: "Bungee", cursive;
+    color: var(--magenta);
+    margin-right: .7em;
+  }
+  .setup code, .setup pre {
+    font-family: inherit;
+    background: rgba(244,241,234,.1);
+    border-radius: .3em;
+  }
+  .setup code { padding: .12em .45em; color: var(--acid); }
+  .setup pre {
+    margin-top: .5em; padding: .6em .8em;
+    overflow-x: auto; white-space: pre;
+    border-left: 3px solid var(--acid);
+  }
+  .setup pre code { background: none; padding: 0; }
+  .setup .os { color: var(--cyan); font-weight: 600; }
+  .setup a { color: var(--magenta); }
+  .setup .why { color: rgba(244,241,234,.65); font-size: .92em; }
+
   .fineprint {
     margin: 2.6rem auto 1rem;
     max-width: 56ch;
@@ -197,11 +242,42 @@
     <a href="https://github.com/Driptap/vizzy">source on GitHub</a>
   </p>
 
+  <section class="setup">
+    <header>SETUP // GIVE VIZZY A BRAIN</header>
+    <ol>
+      <li>
+        Install <a href="https://ollama.com/download">Ollama</a> — the local LLM
+        runtime Vizzy talks to. <span class="why">Nothing leaves your machine;
+        no API keys, no cloud.</span>
+        <pre><code><span class="os"># macOS</span>    download from ollama.com/download, or: brew install --cask ollama-app
+<span class="os"># Windows</span>  download + run the installer from ollama.com/download
+<span class="os"># Linux</span>    curl -fsSL https://ollama.com/install.sh | sh</code></pre>
+      </li>
+      <li>
+        Make sure it's running. The macOS/Windows desktop app starts the server
+        for you (look for the llama in your menu bar / tray). On Linux, or if
+        you installed CLI-only:
+        <pre><code>ollama serve</code></pre>
+        <span class="why">Vizzy expects it on the default port, 11434.</span>
+      </li>
+      <li>
+        Pull a code-capable model — the default Vizzy asks for is
+        <code>qwen2.5-coder</code> (~4.7 GB):
+        <pre><code>ollama pull qwen2.5-coder</code></pre>
+        <span class="why">Any model that can write GLSL works — change the
+        model name in Vizzy's top bar. Bigger model = better shaders, slower
+        drops.</span>
+      </li>
+      <li>
+        Open Vizzy, type a prompt into a deck, hit <code>Generate</code>.
+        First generation warms the model up, then it flows.
+      </li>
+    </ol>
+  </section>
+
   <p class="fineprint">
     Builds are fresh off CI and unsigned — macOS will sulk the first time:
     right-click the app → Open (or <code>xattr -dr com.apple.quarantine Vizzy.app</code>).
-    You'll also want <a href="https://ollama.com">Ollama</a> running locally with a
-    code-capable model (<code>ollama pull qwen2.5-coder</code>) so Vizzy has a brain.
     This very background is a GLSL shader — that's the kind of thing Vizzy makes all night.
   </p>
 </main>

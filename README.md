@@ -6,10 +6,30 @@ MIDI controller, all reacting to live audio input.
 
 ## Prerequisites
 
-- Node.js 20+
-- [Ollama](https://ollama.com) running locally (`ollama serve`, default port 11434)
-- A code-capable model pulled — `npm run model:pull` fetches the default
-  `qwen2.5-coder` (the model name is editable in the top bar)
+- Node.js 20+ (only if running from source — packaged builds are on the
+  [latest release](https://github.com/Driptap/vizzy/releases/latest))
+- [Ollama](https://ollama.com) running locally with a code-capable model
+  (see below)
+
+## Installing Ollama
+
+Vizzy generates shaders with a local LLM via Ollama — nothing leaves your
+machine, no API keys needed.
+
+1. **Install** the runtime:
+   - **macOS** — download from [ollama.com/download](https://ollama.com/download),
+     or `brew install --cask ollama-app` (the GUI app cask, not the `ollama`
+     formula — the app bundles and manages the server for you)
+   - **Windows** — download and run the installer from
+     [ollama.com/download](https://ollama.com/download)
+   - **Linux** — `curl -fsSL https://ollama.com/install.sh | sh`
+2. **Run it.** The macOS/Windows desktop app starts the server automatically
+   (llama icon in the menu bar / tray). On Linux or with a CLI-only install,
+   run `ollama serve`. Vizzy expects the default port, 11434.
+3. **Pull a model.** The default Vizzy requests is `qwen2.5-coder` (~4.7 GB):
+   `ollama pull qwen2.5-coder` (or `npm run model:pull` from a source
+   checkout). Any model that can write GLSL works — the model name is
+   editable in Vizzy's top bar.
 
 ## Run
 
