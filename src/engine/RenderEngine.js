@@ -342,22 +342,29 @@ export class RenderEngine {
       }),
     );
     mesh.frustumCulled = false;
+    // The container absorbs the aspect compensation OUTSIDE the mesh's
+    // rotation: the mesh rotates in isotropic units (rigid, no shearing) and
+    // the container's non-uniform scale cancels the screen's NDC stretch.
+    const container = new THREE.Group();
+    container.add(mesh);
     const scene = new THREE.Scene();
-    scene.add(mesh);
+    scene.add(container);
 
-    deck.sprite = { scene, mesh, spriteId, imageAspect, baseW: 1, baseH: 1, spin: 0 };
+    deck.sprite = { scene, container, mesh, spriteId, imageAspect, baseW: 1, baseH: 1, spin: 0 };
     this.updateSpriteLayout(deck);
     deck.mode = 'sprite';
     return { ok: true };
   }
 
-  // The ortho camera spans the full target, so quad units stretch by the
-  // render aspect — divide it back out and contain-fit to ~85% of the frame.
+  // Sizes are in aspect-isotropic units (equal pixels per unit on both axes);
+  // the container converts them to the ortho camera's stretched NDC space.
+  // Contain-fit to ~85% of the frame.
   updateSpriteLayout(deck) {
     if (!deck.sprite) return;
-    const relative = deck.sprite.imageAspect / (this.aspectUniform.value || 1);
-    const h = Math.min(1.7, 1.7 / relative);
-    deck.sprite.baseW = h * relative;
+    const viewAspect = this.aspectUniform.value || 1;
+    deck.sprite.container.scale.set(1 / viewAspect, 1, 1);
+    const h = Math.min(1.7, (1.7 * viewAspect) / deck.sprite.imageAspect);
+    deck.sprite.baseW = h * deck.sprite.imageAspect;
     deck.sprite.baseH = h;
   }
 
