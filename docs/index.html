@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vizzy — a toy VJ instrument</title>
+<meta name="description" content="Vizzy is a toy VJ app: type a prompt, a local LLM writes a GLSL shader, you mix decks with MIDI while it all reacts to audio.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Bungee+Shade&family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #f4f1ea;
+    --acid: #c8ff00;
+    --magenta: #ff3df2;
+    --cyan: #2bf5ff;
+    --bg: #07060c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Mono", monospace;
+    overflow-x: hidden;
+  }
+  /* live shader background — the page eats its own dog food */
+  #gl {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    display: block; z-index: 0;
+  }
+  .scanlines {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px);
+    mix-blend-mode: multiply;
+  }
+  .vignette {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 42%, transparent 55%, rgba(4,3,8,.82) 100%);
+  }
+  main {
+    position: relative; z-index: 2;
+    min-height: 100%;
+    display: flex; flex-direction: column; align-items: center;
+    padding: clamp(1.2rem, 4vw, 3rem);
+    text-align: center;
+  }
+  .badge {
+    margin-top: 1rem;
+    font-size: .72rem; letter-spacing: .22em; text-transform: uppercase;
+    border: 1px solid rgba(244,241,234,.35);
+    padding: .45em 1.1em; border-radius: 999px;
+    background: rgba(7,6,12,.55); backdrop-filter: blur(4px);
+    animation: rise .7s .1s both;
+  }
+  h1 {
+    font-family: "Bungee Shade", "Bungee", cursive;
+    font-size: clamp(3.4rem, 14vw, 9.5rem);
+    line-height: .95;
+    margin-top: 2.4rem;
+    color: var(--ink);
+    text-shadow:
+      .04em .04em 0 var(--magenta),
+      -.04em -.04em 0 var(--cyan);
+    animation: rise .7s .2s both, jitter 6s 1s infinite steps(1);
+    user-select: none;
+  }
+  .tag {
+    margin-top: 1.4rem;
+    max-width: 34ch;
+    font-size: clamp(.95rem, 2.2vw, 1.15rem);
+    line-height: 1.55;
+    background: rgba(7,6,12,.6); backdrop-filter: blur(3px);
+    padding: .6em .9em; border-radius: .4em;
+    animation: rise .7s .32s both;
+  }
+  .tag em { color: var(--acid); font-style: normal; font-weight: 600; }
+
+  .how {
+    margin-top: 2.2rem;
+    display: flex; gap: .9rem; flex-wrap: wrap; justify-content: center;
+    animation: rise .7s .42s both;
+  }
+  .how span {
+    font-size: .78rem; letter-spacing: .04em;
+    border: 1px dashed rgba(244,241,234,.4);
+    background: rgba(7,6,12,.55);
+    padding: .55em .9em; border-radius: .4em;
+  }
+  .how b { color: var(--cyan); font-weight: 600; }
+
+  .downloads {
+    margin-top: 2.6rem;
+    display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;
+    animation: rise .7s .54s both;
+  }
+  .btn {
+    font-family: "Bungee", cursive;
+    font-size: clamp(.85rem, 2vw, 1.05rem);
+    color: var(--bg);
+    background: var(--acid);
+    text-decoration: none;
+    padding: .85em 1.3em;
+    border: 3px solid var(--bg);
+    border-radius: .55em;
+    box-shadow: .28em .28em 0 var(--magenta);
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  }
+  .btn small {
+    display: block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .62em; font-weight: 600; letter-spacing: .08em;
+  }
+  .btn:hover {
+    transform: translate(-.12em, -.12em);
+    box-shadow: .42em .42em 0 var(--cyan);
+    background: #d9ff4d;
+  }
+  .btn:active { transform: translate(.18em, .18em); box-shadow: .05em .05em 0 var(--magenta); }
+
+  .links {
+    margin-top: 1.6rem;
+    font-size: .82rem;
+    animation: rise .7s .64s both;
+  }
+  .links a { color: var(--cyan); }
+  .links a:hover { color: var(--acid); }
+
+  .fineprint {
+    margin: 2.6rem auto 1rem;
+    max-width: 56ch;
+    font-size: .72rem; line-height: 1.7;
+    color: rgba(244,241,234,.78);
+    background: rgba(7,6,12,.6);
+    padding: .8em 1em; border-radius: .4em;
+    animation: rise .7s .74s both;
+  }
+  .fineprint code {
+    background: rgba(244,241,234,.12);
+    padding: .1em .4em; border-radius: .25em;
+  }
+  .fineprint a { color: var(--magenta); }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(1.2rem); }
+    to   { opacity: 1; transform: none; }
+  }
+  /* occasional glitch twitch on the title — VJ energy, but only occasional */
+  @keyframes jitter {
+    0%, 96%, 100% { transform: none; filter: none; }
+    96.5% { transform: translateX(.18em) skewX(-4deg); filter: hue-rotate(120deg); }
+    97.2% { transform: translateX(-.14em) skewX(3deg); filter: hue-rotate(-90deg); }
+    97.9% { transform: none; filter: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    h1, .badge, .tag, .how, .downloads, .links, .fineprint { animation: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+<div class="scanlines" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
+
+<main>
+  <p class="badge">toy software · zero seriousness</p>
+
+  <h1>VIZZY</h1>
+
+  <p class="tag">
+    A <em>toy VJ instrument</em> that's fun to play with: type a prompt,
+    a local LLM writes a GLSL shader, and you ride the faders while
+    everything wobbles to the music.
+  </p>
+
+  <div class="how">
+    <span><b>01</b> type a prompt</span>
+    <span><b>02</b> LLM dreams up a shader</span>
+    <span><b>03</b> mix decks · MIDI · audio-reactive</span>
+  </div>
+
+  <div class="downloads">
+    <a class="btn" href="https://github.com/Driptap/vizzy/releases/download/latest/Vizzy-mac.dmg">
+       macOS<small>.dmg · apple silicon</small>
+    </a>
+    <a class="btn" href="https://github.com/Driptap/vizzy/releases/download/latest/Vizzy-win.exe">
+      ⊞ Windows<small>.exe installer</small>
+    </a>
+    <a class="btn" href="https://github.com/Driptap/vizzy/releases/download/latest/Vizzy-linux.AppImage">
+      🐧 Linux<small>.AppImage</small>
+    </a>
+  </div>
+
+  <p class="links">
+    <a href="https://github.com/Driptap/vizzy/releases/latest">all builds</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/Driptap/vizzy">source on GitHub</a>
+  </p>
+
+  <p class="fineprint">
+    Builds are fresh off CI and unsigned — macOS will sulk the first time:
+    right-click the app → Open (or <code>xattr -dr com.apple.quarantine Vizzy.app</code>).
+    You'll also want <a href="https://ollama.com">Ollama</a> running locally with a
+    code-capable model (<code>ollama pull qwen2.5-coder</code>) so Vizzy has a brain.
+    This very background is a GLSL shader — that's the kind of thing Vizzy makes all night.
+  </p>
+</main>
+
+<script>
+// Tiny full-screen plasma shader — the same species of visual Vizzy generates.
+(function () {
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl', { antialias: false });
+  if (!gl) { document.body.style.background =
+    'linear-gradient(160deg,#1a0533,#07060c 60%,#001a1c)'; return; }
+
+  const vs = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+  const fs = `
+precision mediump float;
+uniform vec2 r; uniform float t;
+void main(){
+  vec2 uv = (gl_FragCoord.xy*2.-r)/min(r.x,r.y);
+  float a = t*.18;
+  uv *= mat2(cos(a),-sin(a),sin(a),cos(a));
+  float v = 0.;
+  v += sin(uv.x*2.3 + t*.7);
+  v += sin((uv.y + uv.x)*1.7 - t*.5);
+  v += sin(length(uv*2.6) - t*.9);
+  v += sin(length(uv - vec2(sin(t*.33), cos(t*.27)))*4.0);
+  v *= .5;
+  vec3 col = vec3(
+    .5 + .5*sin(v*3.1415 + t*.4),
+    .5 + .5*sin(v*3.1415 + 2.1 - t*.23),
+    .5 + .5*sin(v*3.1415 + 4.2));
+  // pull it dark + acid-tint so the type stays readable
+  col = pow(col, vec3(2.4)) * vec3(.85, 1.0, .9);
+  col += vec3(.06,.05,.09);
+  gl_FragColor = vec4(col, 1.);
+}`;
+
+  function shader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    return s;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog); gl.useProgram(prog);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  const uR = gl.getUniformLocation(prog, 'r');
+  const uT = gl.getUniformLocation(prog, 't');
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  addEventListener('resize', resize); resize();
+
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function frame(ms) {
+    gl.uniform2f(uR, canvas.width, canvas.height);
+    gl.uniform1f(uT, ms * 0.001);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (!still) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: release/Vizzy-mac.*
+          - os: ubuntu-latest
+            artifact: release/Vizzy-linux.AppImage
+          - os: windows-latest
+            artifact: release/Vizzy-win.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      # No signing certificates on CI — ship unsigned builds.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run dist -- --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: builds
+          merge-multiple: true
+
+      - name: Update rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest builds/* \
+            --title "Latest build" \
+            --notes "Automated build of ${{ github.sha }}. Unsigned binaries — on macOS, right-click → Open the first time (or run: xattr -dr com.apple.quarantine Vizzy.app)." \
+            --latest
