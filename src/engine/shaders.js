@@ -39,14 +39,32 @@ void main() {
 `;
 }
 
-export const DEFAULT_DECK_BODIES = [
-  makeDefaultBody(0.0),
-  makeDefaultBody(1.6),
-  makeDefaultBody(3.1),
-  makeDefaultBody(4.7),
-];
+// 8 slots: scene A channels 1-4, scene B channels 5-8
+export const DEFAULT_DECK_BODIES = [0.0, 1.6, 3.1, 4.7, 0.8, 2.4, 3.9, 5.5].map(
+  makeDefaultBody,
+);
 
-export const COMPOSITE_FRAGMENT = /* glsl */ `
+// Shared per-deck sampling: each deck occupies a centered window of the
+// canvas sized by "size" (fractions of canvas width/height); outside it the
+// deck contributes nothing. "zoom" scales the content within that window.
+// Alpha is treated as a brightness multiplier: LLMs sometimes encode the
+// shader's shape in gl_FragColor.a, which would otherwise be discarded and
+// render as a solid colour wash.
+const DECK_SAMPLING = /* glsl */ `
+vec2 zoomUv(vec2 uv, float s) {
+  return (uv - 0.5) / max(s, 0.001) + 0.5;
+}
+
+vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size) {
+  vec2 local = (uv - 0.5) / max(size, vec2(0.001)) + 0.5;
+  vec2 inside = step(vec2(0.0), local) * step(local, vec2(1.0));
+  vec4 t = texture2D(tex, zoomUv(local, zoom));
+  return t.rgb * t.a * inside.x * inside.y;
+}
+`;
+
+// One scene: additive mix of its 4 decks (used for the A and B side views)
+export const SCENE_FRAGMENT = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D u_deck1;
@@ -65,29 +83,63 @@ uniform vec2 u_size1;
 uniform vec2 u_size2;
 uniform vec2 u_size3;
 uniform vec2 u_size4;
-
-vec2 zoomUv(vec2 uv, float s) {
-  return (uv - 0.5) / max(s, 0.001) + 0.5;
-}
-
-// Each deck occupies a centered window of the canvas sized by "size"
-// (fractions of canvas width/height); outside it the deck contributes
-// nothing. "zoom" scales the content within that window. Alpha is treated
-// as a brightness multiplier: LLMs sometimes encode the shader's shape in
-// gl_FragColor.a, which would otherwise be discarded here and render as a
-// solid colour wash.
-vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size) {
-  vec2 local = (uv - 0.5) / max(size, vec2(0.001)) + 0.5;
-  vec2 inside = step(vec2(0.0), local) * step(local, vec2(1.0));
-  vec4 t = texture2D(tex, zoomUv(local, zoom));
-  return t.rgb * t.a * inside.x * inside.y;
-}
-
+${DECK_SAMPLING}
 void main() {
   vec3 c = deckColor(u_deck1, vUv, u_scale1, u_size1) * u_mix1
          + deckColor(u_deck2, vUv, u_scale2, u_size2) * u_mix2
          + deckColor(u_deck3, vUv, u_scale3, u_size3) * u_mix3
          + deckColor(u_deck4, vUv, u_scale4, u_size4) * u_mix4;
+  gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
+}
+`;
+
+export const COMPOSITE_FRAGMENT = /* glsl */ `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D u_deck1;
+uniform sampler2D u_deck2;
+uniform sampler2D u_deck3;
+uniform sampler2D u_deck4;
+uniform sampler2D u_deck5;
+uniform sampler2D u_deck6;
+uniform sampler2D u_deck7;
+uniform sampler2D u_deck8;
+uniform float u_mix1;
+uniform float u_mix2;
+uniform float u_mix3;
+uniform float u_mix4;
+uniform float u_mix5;
+uniform float u_mix6;
+uniform float u_mix7;
+uniform float u_mix8;
+uniform float u_scale1;
+uniform float u_scale2;
+uniform float u_scale3;
+uniform float u_scale4;
+uniform float u_scale5;
+uniform float u_scale6;
+uniform float u_scale7;
+uniform float u_scale8;
+uniform vec2 u_size1;
+uniform vec2 u_size2;
+uniform vec2 u_size3;
+uniform vec2 u_size4;
+uniform vec2 u_size5;
+uniform vec2 u_size6;
+uniform vec2 u_size7;
+uniform vec2 u_size8;
+uniform float u_xfade; // 0.0 = scene A (decks 1-4), 1.0 = scene B (decks 5-8)
+${DECK_SAMPLING}
+void main() {
+  vec3 a = deckColor(u_deck1, vUv, u_scale1, u_size1) * u_mix1
+         + deckColor(u_deck2, vUv, u_scale2, u_size2) * u_mix2
+         + deckColor(u_deck3, vUv, u_scale3, u_size3) * u_mix3
+         + deckColor(u_deck4, vUv, u_scale4, u_size4) * u_mix4;
+  vec3 b = deckColor(u_deck5, vUv, u_scale5, u_size5) * u_mix5
+         + deckColor(u_deck6, vUv, u_scale6, u_size6) * u_mix6
+         + deckColor(u_deck7, vUv, u_scale7, u_size7) * u_mix7
+         + deckColor(u_deck8, vUv, u_scale8, u_size8) * u_mix8;
+  vec3 c = a * (1.0 - u_xfade) + b * u_xfade;
   gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
 }
 `;

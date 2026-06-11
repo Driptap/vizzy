@@ -1,4 +1,5 @@
-const STORAGE_KEY = 'promptvj.midiBindings';
+const STORAGE_KEY = 'vizzy.midiBindings';
+const LEGACY_STORAGE_KEY = 'promptvj.midiBindings'; // pre-rebrand fallback
 
 const CC_STATUS = 0xb0;
 
@@ -14,7 +15,10 @@ export class MidiEngine {
     this.access = null;
     this.armedControl = null;
     try {
-      this.bindings = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      this.bindings =
+        JSON.parse(
+          localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY),
+        ) || {};
     } catch {
       this.bindings = {};
     }

@@ -1,7 +1,7 @@
 {
-  "name": "prompt-vj",
+  "name": "vizzy",
   "version": "0.1.0",
-  "description": "Live VJ tool: LLM-generated GLSL shaders, 4-deck mixer, audio-reactive, MIDI-controlled",
+  "description": "Vizzy — live VJ tool: LLM-generated GLSL shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled",
   "private": true,
   "main": "electron/main.cjs",
   "scripts": {

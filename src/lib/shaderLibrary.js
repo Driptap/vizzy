@@ -9,7 +9,7 @@ let dirPromise = null;
 
 function shadersDir() {
   if (!dirPromise) {
-    dirPromise = ipcRenderer.invoke('promptvj:get-shaders-dir').then(async (dir) => {
+    dirPromise = ipcRenderer.invoke('vizzy:get-shaders-dir').then(async (dir) => {
       await fs.mkdir(dir, { recursive: true });
       return dir;
     });
@@ -31,7 +31,7 @@ export async function listShaders() {
       try {
         return JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'));
       } catch (err) {
-        console.warn('[PromptVJ] Skipping unreadable library file:', file, err);
+        console.warn('[Vizzy] Skipping unreadable library file:', file, err);
         return null;
       }
     }),

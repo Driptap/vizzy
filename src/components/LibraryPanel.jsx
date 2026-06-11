@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 const MENU_WIDTH = 168;
 const MENU_HEIGHT = 196;
 
-export function LibraryPanel({ open, shaders, onDelete, onRename, onAddToChannel }) {
+export function LibraryPanel({ open, shaders, sceneLetter, onDelete, onRename, onAddToChannel }) {
   const [menu, setMenu] = useState(null); // { x, y, entry }
   const [renamingId, setRenamingId] = useState(null);
   const [draft, setDraft] = useState('');
@@ -125,7 +125,8 @@ export function LibraryPanel({ open, shaders, onDelete, onRename, onAddToChannel
               }}
               className="block w-full px-3 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800 hover:text-cyan-300"
             >
-              Add to channel {channel + 1}
+              Add to channel {sceneLetter}
+              {channel + 1}
             </button>
           ))}
           <div className="my-1 border-t border-neutral-800" />

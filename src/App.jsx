@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RenderEngine } from './engine/RenderEngine';
+import { RenderEngine, CHANNELS } from './engine/RenderEngine';
 import { AudioEngine } from './engine/AudioEngine';
 import { MidiEngine } from './engine/MidiEngine';
 import { GenerationQueue, DEFAULT_MODEL } from './llm/ollama';
@@ -10,58 +10,75 @@ import { Mixer } from './components/Mixer';
 import { LibraryPanel } from './components/LibraryPanel';
 import { listShaders, saveShader, renameShader, deleteShader } from './lib/shaderLibrary';
 
-const DECK_COUNT = 4;
-const INITIAL_OPACITIES = [1, 0, 0, 0];
+const SLOTS = CHANNELS * 2; // scene A: 0-3, scene B: 4-7
+const SCENE_LETTERS = ['A', 'B'];
+// channel 1 of each scene starts audible so neither side of the fader is black
+const INITIAL_OPACITIES = [1, 0, 0, 0, 1, 0, 0, 0];
 
 export default function App() {
-  const masterCanvasRef = useRef(null);
+  const sceneACanvasRef = useRef(null);
+  const sceneBCanvasRef = useRef(null);
+  const masterWindowRef = useRef(null);
   const previewRefs = useRef([]);
   const engineRef = useRef(null);
   const audioRef = useRef(null);
   const midiRef = useRef(null);
   const queueRef = useRef(null);
-  const modelRef = useRef(localStorage.getItem('promptvj.model') || DEFAULT_MODEL);
+  // fall back to the pre-rebrand (promptvj.*) keys so settings survive
+  const modelRef = useRef(
+    localStorage.getItem('vizzy.model') || localStorage.getItem('promptvj.model') || DEFAULT_MODEL,
+  );
 
   const [decks, setDecks] = useState(() =>
-    Array.from({ length: DECK_COUNT }, () => ({ status: 'idle', error: null })),
+    Array.from({ length: SLOTS }, () => ({ status: 'idle', error: null })),
   );
+  const [prompts, setPrompts] = useState(() => Array(SLOTS).fill(''));
   const [opacities, setOpacities] = useState(INITIAL_OPACITIES);
-  const [muted, setMuted] = useState(() => Array(DECK_COUNT).fill(false));
-  const [scales, setScales] = useState(() => Array(DECK_COUNT).fill(1));
+  const [muted, setMuted] = useState(() => Array(SLOTS).fill(false));
+  const [scales, setScales] = useState(() => Array(SLOTS).fill(1));
   const [sizes, setSizes] = useState(() =>
-    Array.from({ length: DECK_COUNT }, () => ({ x: 1, y: 1 })),
+    Array.from({ length: SLOTS }, () => ({ x: 1, y: 1 })),
+  );
+  const [crossfade, setCrossfade] = useState(0);
+  const [cueScene, setCueScene] = useState(0);
+  const [library, setLibrary] = useState([]);
+  const [libraryOpen, setLibraryOpen] = useState(
+    () =>
+      (localStorage.getItem('vizzy.libraryOpen') ??
+        localStorage.getItem('promptvj.libraryOpen')) === '1',
   );
   const [audioActive, setAudioActive] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState(modelRef.current);
-  const [library, setLibrary] = useState([]);
-  const [libraryOpen, setLibraryOpen] = useState(
-    () => localStorage.getItem('promptvj.libraryOpen') === '1',
-  );
   const [midiLearn, setMidiLearn] = useState(false);
   const [armedControl, setArmedControl] = useState(null);
   const [controlMap, setControlMap] = useState({});
   const [midiInputs, setMidiInputs] = useState(0);
+  const [masterOpen, setMasterOpen] = useState(false);
 
-  const setDeckState = useCallback((index, status, error = null) => {
-    setDecks((prev) => prev.map((d, i) => (i === index ? { status, error } : d)));
+  const setDeckState = useCallback((slot, status, error = null) => {
+    setDecks((prev) => prev.map((d, i) => (i === slot ? { status, error } : d)));
   }, []);
 
-  const applyOpacity = useCallback((index, value) => {
-    setOpacities((prev) => prev.map((v, i) => (i === index ? value : v)));
+  const applyOpacity = useCallback((slot, value) => {
+    setOpacities((prev) => prev.map((v, i) => (i === slot ? value : v)));
   }, []);
 
-  const toggleMute = useCallback((index) => {
-    setMuted((prev) => prev.map((m, i) => (i === index ? !m : m)));
+  const toggleMute = useCallback((slot) => {
+    setMuted((prev) => prev.map((m, i) => (i === slot ? !m : m)));
   }, []);
 
-  const applyScale = useCallback((index, value) => {
-    setScales((prev) => prev.map((v, i) => (i === index ? value : v)));
+  const applyScale = useCallback((slot, value) => {
+    setScales((prev) => prev.map((v, i) => (i === slot ? value : v)));
   }, []);
 
-  const applySize = useCallback((index, axis, value) => {
-    setSizes((prev) => prev.map((s, i) => (i === index ? { ...s, [axis]: value } : s)));
+  const applySize = useCallback((slot, axis, value) => {
+    setSizes((prev) => prev.map((s, i) => (i === slot ? { ...s, [axis]: value } : s)));
+  }, []);
+
+  const applyCrossfade = useCallback((value) => {
+    setCrossfade(value);
   }, []);
 
   // Single sync point for the composite uniforms: a muted channel outputs 0
@@ -72,13 +89,22 @@ export default function App() {
     opacities.forEach((value, i) => engine.setOpacity(i, muted[i] ? 0 : value));
     scales.forEach((value, i) => engine.setScale(i, value));
     sizes.forEach((size, i) => engine.setSize(i, size.x, size.y));
-  }, [opacities, muted, scales, sizes]);
+    engine.setCrossfade(crossfade);
+  }, [opacities, muted, scales, sizes, crossfade]);
+
+  useEffect(() => {
+    engineRef.current?.setCueScene(cueScene);
+  }, [cueScene]);
 
   useEffect(() => {
     const audio = new AudioEngine();
     audioRef.current = audio;
 
-    const engine = new RenderEngine(masterCanvasRef.current, previewRefs.current, audio);
+    const engine = new RenderEngine(
+      { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
+      previewRefs.current,
+      audio,
+    );
     engineRef.current = engine;
 
     queueRef.current = new GenerationQueue({
@@ -88,8 +114,15 @@ export default function App() {
 
     const midi = new MidiEngine({
       onControlValue: (controlId, value) => {
-        const match = controlId.match(/^mix(\d)$/);
-        if (match) applyOpacity(Number(match[1]) - 1, value);
+        if (controlId === 'xfade') {
+          applyCrossfade(value);
+          return;
+        }
+        const match = controlId.match(/^([ab])_mix([1-4])$/);
+        if (match) {
+          const slot = (match[1] === 'b' ? CHANNELS : 0) + Number(match[2]) - 1;
+          applyOpacity(slot, value);
+        }
       },
       onLearned: () => {
         setArmedControl(null);
@@ -101,41 +134,123 @@ export default function App() {
     midi
       .init()
       .then(() => setMidiInputs(midi.inputCount))
-      .catch((err) => console.warn('[PromptVJ] MIDI unavailable:', err));
+      .catch((err) => console.warn('[Vizzy] MIDI unavailable:', err));
 
     return () => {
       engine.dispose();
       audio.stop();
       midi.dispose();
+      const popup = masterWindowRef.current;
+      if (popup && !popup.closed) popup.close();
     };
-  }, [setDeckState, applyOpacity]);
+  }, [setDeckState, applyOpacity, applyCrossfade]);
+
+  // Master out lives in its own window: window.open keeps it in this renderer
+  // process, so the engine blits straight into its canvas each frame.
+  const handleToggleMaster = useCallback(() => {
+    const existing = masterWindowRef.current;
+    if (existing && !existing.closed) {
+      existing.close(); // pagehide handler below does the detach
+      return;
+    }
+
+    const popup = window.open('', 'vizzy-master', 'width=1280,height=720');
+    if (!popup) return;
+    masterWindowRef.current = popup;
+
+    const doc = popup.document;
+    doc.title = 'Vizzy — Master Out';
+    doc.body.innerHTML = '';
+    doc.body.style.cssText = 'margin:0;background:#000;overflow:hidden;';
+    const canvas = doc.createElement('canvas');
+    canvas.style.cssText = 'display:block;width:100vw;height:100vh;';
+    canvas.title = 'Double-click for fullscreen';
+    doc.body.appendChild(canvas);
+    canvas.addEventListener('dblclick', () => {
+      if (doc.fullscreenElement) doc.exitFullscreen();
+      else canvas.requestFullscreen().catch(() => {});
+    });
+
+    popup.addEventListener('pagehide', () => {
+      if (masterWindowRef.current === popup) {
+        masterWindowRef.current = null;
+        engineRef.current?.setMasterCanvas(null);
+        setMasterOpen(false);
+      }
+    });
+
+    engineRef.current?.setMasterCanvas(canvas);
+    setMasterOpen(true);
+  }, []);
 
   useEffect(() => {
     listShaders()
       .then(setLibrary)
-      .catch((err) => console.warn('[PromptVJ] Could not load shader library:', err));
+      .catch((err) => console.warn('[Vizzy] Could not load shader library:', err));
   }, []);
 
   const handleToggleLibrary = useCallback(() => {
     setLibraryOpen((prev) => {
-      localStorage.setItem('promptvj.libraryOpen', prev ? '0' : '1');
+      localStorage.setItem('vizzy.libraryOpen', prev ? '0' : '1');
       return !prev;
     });
   }, []);
 
-  const handleSaveDeck = useCallback(async (index) => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    try {
-      const entry = await saveShader({
-        code: engine.getShaderBody(index),
-        screenshot: engine.getPreviewDataURL(index),
+  // ---- builder actions: channel (0-3) -> slot via the cued scene ----
+
+  const handlePromptChange = useCallback(
+    (channel, text) => {
+      const slot = cueScene * CHANNELS + channel;
+      setPrompts((prev) => prev.map((p, i) => (i === slot ? text : p)));
+    },
+    [cueScene],
+  );
+
+  const handleGenerate = useCallback(
+    (channel, prompt) => {
+      const slot = cueScene * CHANNELS + channel;
+      queueRef.current?.enqueue(slot, prompt, (raw) => {
+        const code = extractShaderCode(raw);
+        if (!code) {
+          setDeckState(slot, 'failed', 'No GLSL main() block found in the model response');
+          return;
+        }
+        setDeckState(slot, 'compiling');
+        const result = engineRef.current.stageShader(slot, code);
+        if (result.ok) setDeckState(slot, 'active');
+        else setDeckState(slot, 'failed', result.error);
       });
-      setLibrary((prev) => [entry, ...prev]);
-    } catch (err) {
-      console.error('[PromptVJ] Saving shader failed:', err);
-    }
-  }, []);
+    },
+    [setDeckState, cueScene],
+  );
+
+  const handleSaveDeck = useCallback(
+    async (channel) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const slot = cueScene * CHANNELS + channel;
+      try {
+        const entry = await saveShader({
+          code: engine.getShaderBody(slot),
+          screenshot: engine.getPreviewDataURL(channel),
+        });
+        setLibrary((prev) => [entry, ...prev]);
+      } catch (err) {
+        console.error('[Vizzy] Saving shader failed:', err);
+      }
+    },
+    [cueScene],
+  );
+
+  const handleAddToChannel = useCallback(
+    (entry, channel) => {
+      const slot = cueScene * CHANNELS + channel;
+      const result = engineRef.current?.stageShader(slot, entry.code);
+      if (result?.ok) setDeckState(slot, 'active');
+      else setDeckState(slot, 'failed', result?.error || 'Compile failed');
+    },
+    [setDeckState, cueScene],
+  );
 
   const handleDeleteShader = useCallback(async (id) => {
     await deleteShader(id);
@@ -147,35 +262,9 @@ export default function App() {
       const updated = await renameShader(entry, name);
       setLibrary((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
     } catch (err) {
-      console.error('[PromptVJ] Renaming shader failed:', err);
+      console.error('[Vizzy] Renaming shader failed:', err);
     }
   }, []);
-
-  const handleAddToChannel = useCallback(
-    (entry, channel) => {
-      const result = engineRef.current?.stageShader(channel, entry.code);
-      if (result?.ok) setDeckState(channel, 'active');
-      else setDeckState(channel, 'failed', result?.error || 'Compile failed');
-    },
-    [setDeckState],
-  );
-
-  const handleGenerate = useCallback(
-    (index, prompt) => {
-      queueRef.current?.enqueue(index, prompt, (raw) => {
-        const code = extractShaderCode(raw);
-        if (!code) {
-          setDeckState(index, 'failed', 'No GLSL main() block found in the model response');
-          return;
-        }
-        setDeckState(index, 'compiling');
-        const result = engineRef.current.stageShader(index, code);
-        if (result.ok) setDeckState(index, 'active');
-        else setDeckState(index, 'failed', result.error);
-      });
-    },
-    [setDeckState],
-  );
 
   const refreshDevices = useCallback(async () => {
     const devices = await audioRef.current.listDevices();
@@ -194,31 +283,28 @@ export default function App() {
       setAudioActive(true);
       await refreshDevices(); // labels only populate after permission is granted
     } catch (err) {
-      console.error('[PromptVJ] Audio input failed:', err);
+      console.error('[Vizzy] Audio input failed:', err);
       setAudioActive(false);
     }
   }, [selectedDevice, refreshDevices]);
 
-  const handleSelectDevice = useCallback(
-    async (deviceId) => {
-      setSelectedDevice(deviceId);
-      const audio = audioRef.current;
-      if (audio.active) {
-        try {
-          await audio.start(deviceId || undefined);
-        } catch (err) {
-          console.error('[PromptVJ] Audio input failed:', err);
-          setAudioActive(false);
-        }
+  const handleSelectDevice = useCallback(async (deviceId) => {
+    setSelectedDevice(deviceId);
+    const audio = audioRef.current;
+    if (audio.active) {
+      try {
+        await audio.start(deviceId || undefined);
+      } catch (err) {
+        console.error('[Vizzy] Audio input failed:', err);
+        setAudioActive(false);
       }
-    },
-    [],
-  );
+    }
+  }, []);
 
   const handleModelChange = useCallback((value) => {
     setModel(value);
     modelRef.current = value;
-    localStorage.setItem('promptvj.model', value);
+    localStorage.setItem('vizzy.model', value);
   }, []);
 
   const handleToggleMidiLearn = useCallback(() => {
@@ -236,11 +322,15 @@ export default function App() {
     setArmedControl(controlId);
   }, []);
 
+  const sceneLetter = SCENE_LETTERS[cueScene];
+
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-200">
       <TopBar
         libraryOpen={libraryOpen}
         onToggleLibrary={handleToggleLibrary}
+        masterOpen={masterOpen}
+        onToggleMaster={handleToggleMaster}
         audioActive={audioActive}
         audioDevices={audioDevices}
         selectedDevice={selectedDevice}
@@ -257,46 +347,70 @@ export default function App() {
         <LibraryPanel
           open={libraryOpen}
           shaders={library}
+          sceneLetter={sceneLetter}
           onDelete={handleDeleteShader}
           onRename={handleRenameShader}
           onAddToChannel={handleAddToChannel}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 gap-3 p-3">
-            <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-neutral-800 bg-black">
-              <canvas ref={masterCanvasRef} className="block h-full w-full" />
+          <div className="flex min-h-44 flex-1 gap-3 p-3">
+            <div className="relative min-w-0 flex-1 overflow-hidden rounded-lg border border-neutral-800 bg-black">
+              <canvas ref={sceneACanvasRef} className="block h-full w-full" />
+              <span className="pointer-events-none absolute left-2 top-1.5 text-[10px] font-black tracking-widest text-cyan-400/80">
+                SCENE A
+              </span>
             </div>
+
             <Mixer
               opacities={opacities}
               muted={muted}
               onChange={applyOpacity}
               onToggleMute={toggleMute}
+              crossfade={crossfade}
+              onCrossfadeChange={applyCrossfade}
+              cueScene={cueScene}
+              onCue={setCueScene}
               midiLearn={midiLearn}
               armedControl={armedControl}
               onArm={handleArm}
               controlMap={controlMap}
             />
+
+            <div className="relative min-w-0 flex-1 overflow-hidden rounded-lg border border-neutral-800 bg-black">
+              <canvas ref={sceneBCanvasRef} className="block h-full w-full" />
+              <span className="pointer-events-none absolute right-2 top-1.5 text-[10px] font-black tracking-widest text-fuchsia-400/80">
+                SCENE B
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-4 gap-3 p-3 pt-0">
-            {decks.map((deck, i) => (
-              <DeckModule
-                key={i}
-                index={i}
-                status={deck.status}
-                error={deck.error}
-                scale={scales[i]}
-                onScaleChange={applyScale}
-                size={sizes[i]}
-                onSizeChange={applySize}
-                onGenerate={handleGenerate}
-                onSave={handleSaveDeck}
-                previewRef={(el) => {
-                  previewRefs.current[i] = el;
-                }}
-              />
-            ))}
+            {[0, 1, 2, 3].map((channel) => {
+              const slot = cueScene * CHANNELS + channel;
+              return (
+                <DeckModule
+                  key={channel}
+                  index={channel}
+                  sceneLetter={sceneLetter}
+                  status={decks[slot].status}
+                  error={decks[slot].error}
+                  prompt={prompts[slot]}
+                  onPromptChange={handlePromptChange}
+                  scale={scales[slot]}
+                  onScaleChange={(ch, v) => applyScale(cueScene * CHANNELS + ch, v)}
+                  size={sizes[slot]}
+                  onSizeChange={(ch, axis, v) =>
+                    applySize(cueScene * CHANNELS + ch, axis, v)
+                  }
+                  onGenerate={handleGenerate}
+                  onSave={handleSaveDeck}
+                  previewRef={(el) => {
+                    previewRefs.current[channel] = el;
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
       </div>

@@ -14,8 +14,11 @@ const BUSY_STATUSES = ['queued', 'generating', 'compiling'];
 
 export function DeckModule({
   index,
+  sceneLetter,
   status,
   error,
+  prompt,
+  onPromptChange,
   scale,
   onScaleChange,
   size,
@@ -24,7 +27,6 @@ export function DeckModule({
   onSave,
   previewRef,
 }) {
-  const [prompt, setPrompt] = useState('');
   const [saved, setSaved] = useState(false);
   const badge = STATUS_STYLES[status] || STATUS_STYLES.idle;
   const busy = BUSY_STATUSES.includes(status);
@@ -43,7 +45,11 @@ export function DeckModule({
     <div className="flex flex-col gap-2 rounded-lg border border-neutral-800 bg-neutral-900 p-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-bold tracking-widest text-neutral-400">
-          DECK {index + 1}
+          DECK{' '}
+          <span className={sceneLetter === 'A' ? 'text-cyan-400' : 'text-fuchsia-400'}>
+            {sceneLetter}
+            {index + 1}
+          </span>
         </span>
         <div className="flex items-center gap-1.5">
           <button
@@ -64,13 +70,16 @@ export function DeckModule({
         </div>
       </div>
 
-      {/* width/height attrs are managed by RenderEngine to track the master
-          window's aspect; h-auto lets CSS follow that intrinsic ratio */}
+      {/* width/height attrs are managed by RenderEngine to track the scene
+          views' aspect. The DISPLAY box is fixed 16:9 with object-contain
+          (letterboxed) — if display height followed the render aspect, tall
+          aspects would grow the card, shrink the scene views above, and feed
+          back into an even taller aspect until the layout collapsed. */}
       <canvas
         ref={previewRef}
         width={160}
         height={90}
-        className="h-auto w-full rounded border border-neutral-800 bg-black"
+        className="aspect-video w-full rounded border border-neutral-800 bg-black object-contain"
       />
 
       <div className="flex items-center gap-1.5">
@@ -119,7 +128,7 @@ export function DeckModule({
 
       <textarea
         value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
+        onChange={(e) => onPromptChange(index, e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate();
         }}

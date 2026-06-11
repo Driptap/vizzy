@@ -3,13 +3,17 @@ import {
   VERTEX_SHADER,
   buildFragmentShader,
   DEFAULT_DECK_BODIES,
+  SCENE_FRAGMENT,
   COMPOSITE_FRAGMENT,
 } from './shaders';
+
+export const CHANNELS = 4; // channels per scene
+export const SCENES = 2; // A (decks 0-3) and B (decks 4-7)
 
 const BASE_DECK_WIDTH = 960;
 const BASE_PREVIEW_WIDTH = 160;
 const FALLBACK_ASPECT = 16 / 9;
-// frames the master canvas aspect must hold steady before deck targets are
+// frames the scene-view aspect must hold steady before deck targets are
 // reallocated — avoids thrashing GPU memory during a window-resize drag
 const ASPECT_SETTLE_FRAMES = 12;
 
@@ -24,10 +28,29 @@ function validateFragmentSource(gl, source) {
 }
 
 export class RenderEngine {
-  constructor(masterCanvas, previewCanvases, audioEngine) {
+  /**
+   * @param {{a: HTMLCanvasElement, b: HTMLCanvasElement}} viewCanvases
+   *   2D canvases the scene composites are blitted onto. The crossfaded
+   *   master is attached separately via setMasterCanvas (it lives in its own
+   *   pop-out window).
+   * @param {HTMLCanvasElement[]} previewCanvases 4 deck thumbnails (cued scene)
+   * @param {AudioEngine} audioEngine
+   */
+  constructor(viewCanvases, previewCanvases, audioEngine) {
     this.audioEngine = audioEngine;
-    this.renderer = new THREE.WebGLRenderer({ canvas: masterCanvas, antialias: false });
+    // The GL canvas is never shown: one context renders every composite pass
+    // and the result is blitted to the on-screen 2D view canvases (a WebGL
+    // context can only present to a single canvas).
+    this.renderer = new THREE.WebGLRenderer({ antialias: false });
     this.renderer.setClearColor(0x000000, 1);
+
+    this.views = { master: { canvas: null, ctx: null } };
+    Object.entries(viewCanvases).forEach(([key, canvas]) => {
+      this.views[key] = {
+        canvas: canvas || null,
+        ctx: canvas ? canvas.getContext('2d') : null,
+      };
+    });
 
     // Captures three.js-level shader failures during the staging render so a
     // bad LLM shader is rejected instead of crashing the visuals.
@@ -38,7 +61,7 @@ export class RenderEngine {
         gl.getProgramInfoLog(program) ||
         'Unknown shader error';
       this.shaderError = log.trim();
-      console.error('[PromptVJ] Shader error:', this.shaderError);
+      console.error('[Vizzy] Shader error:', this.shaderError);
     };
 
     this.clock = new THREE.Clock();
@@ -56,9 +79,10 @@ export class RenderEngine {
       u_audio_level: { value: 0 },
     };
 
+    const viewA = this.views.a?.canvas;
     const initialAspect =
-      masterCanvas.clientWidth > 0 && masterCanvas.clientHeight > 0
-        ? masterCanvas.clientWidth / masterCanvas.clientHeight
+      viewA && viewA.clientWidth > 0 && viewA.clientHeight > 0
+        ? viewA.clientWidth / viewA.clientHeight
         : FALLBACK_ASPECT;
     this.appliedAspect = 0;
     this.pendingAspect = null;
@@ -70,7 +94,8 @@ export class RenderEngine {
 
     const targetOptions = { depthBuffer: false, stencilBuffer: false };
 
-    this.decks = DEFAULT_DECK_BODIES.map((body, i) => {
+    // 8 shader slots: indices 0-3 are scene A, 4-7 are scene B
+    this.decks = DEFAULT_DECK_BODIES.map((body) => {
       const scene = new THREE.Scene();
       const mesh = new THREE.Mesh(this.quadGeometry, this.buildDeckMaterial(body));
       mesh.frustumCulled = false;
@@ -81,55 +106,70 @@ export class RenderEngine {
       target.texture.wrapS = THREE.MirroredRepeatWrapping;
       target.texture.wrapT = THREE.MirroredRepeatWrapping;
 
-      const previewCanvas = previewCanvases[i] || null;
-      return {
-        scene,
-        mesh,
-        body,
-        target,
-        previewTarget: new THREE.WebGLRenderTarget(
-          this.previewWidth,
-          this.previewHeight,
-          targetOptions,
-        ),
-        previewCanvas,
-        previewCtx: previewCanvas ? previewCanvas.getContext('2d') : null,
-        previewBuffer: new Uint8Array(this.previewWidth * this.previewHeight * 4),
-        previewImage: new ImageData(this.previewWidth, this.previewHeight),
-      };
+      return { scene, mesh, body, target };
     });
+
+    // Per-slot uniform objects, shared by reference between the scene
+    // composites and the master composite — one write reaches all of them.
+    this.slotUniforms = this.decks.map((deck, i) => ({
+      deck: { value: deck.target.texture },
+      mix: { value: i % CHANNELS === 0 ? 1 : 0 },
+      scale: { value: 1 },
+      size: { value: new THREE.Vector2(1, 1) },
+    }));
+    this.xfadeUniform = { value: 0 };
+
+    const sceneUniformSet = (sceneIndex) => {
+      const uniforms = {};
+      for (let ch = 0; ch < CHANNELS; ch += 1) {
+        const slot = this.slotUniforms[sceneIndex * CHANNELS + ch];
+        uniforms[`u_deck${ch + 1}`] = slot.deck;
+        uniforms[`u_mix${ch + 1}`] = slot.mix;
+        uniforms[`u_scale${ch + 1}`] = slot.scale;
+        uniforms[`u_size${ch + 1}`] = slot.size;
+      }
+      return uniforms;
+    };
+    const masterUniforms = { u_xfade: this.xfadeUniform };
+    this.slotUniforms.forEach((slot, i) => {
+      masterUniforms[`u_deck${i + 1}`] = slot.deck;
+      masterUniforms[`u_mix${i + 1}`] = slot.mix;
+      masterUniforms[`u_scale${i + 1}`] = slot.scale;
+      masterUniforms[`u_size${i + 1}`] = slot.size;
+    });
+
+    const makeCompositeScene = (uniforms, fragmentShader) => {
+      const scene = new THREE.Scene();
+      const mesh = new THREE.Mesh(
+        this.quadGeometry,
+        new THREE.ShaderMaterial({ uniforms, vertexShader: VERTEX_SHADER, fragmentShader }),
+      );
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      return scene;
+    };
+    this.sceneComposites = [
+      makeCompositeScene(sceneUniformSet(0), SCENE_FRAGMENT),
+      makeCompositeScene(sceneUniformSet(1), SCENE_FRAGMENT),
+    ];
+    this.masterComposite = makeCompositeScene(masterUniforms, COMPOSITE_FRAGMENT);
+
+    // The 4 on-screen preview canvases show the *cued* scene's channels; one
+    // shared scratch target + buffer serves all of them (and staging compiles).
+    this.cueScene = 0;
+    this.previewSlots = previewCanvases.map((canvas) => ({
+      canvas: canvas || null,
+      ctx: canvas ? canvas.getContext('2d') : null,
+    }));
+    this.previewTarget = new THREE.WebGLRenderTarget(
+      this.previewWidth,
+      this.previewHeight,
+      targetOptions,
+    );
+    this.previewBuffer = new Uint8Array(this.previewWidth * this.previewHeight * 4);
+    this.previewImage = new ImageData(this.previewWidth, this.previewHeight);
     this.syncPreviewCanvases();
     this.appliedAspect = this.deckWidth / this.deckHeight;
-
-    this.compositeUniforms = {
-      u_deck1: { value: this.decks[0].target.texture },
-      u_deck2: { value: this.decks[1].target.texture },
-      u_deck3: { value: this.decks[2].target.texture },
-      u_deck4: { value: this.decks[3].target.texture },
-      u_mix1: { value: 1 },
-      u_mix2: { value: 0 },
-      u_mix3: { value: 0 },
-      u_mix4: { value: 0 },
-      u_scale1: { value: 1 },
-      u_scale2: { value: 1 },
-      u_scale3: { value: 1 },
-      u_scale4: { value: 1 },
-      u_size1: { value: new THREE.Vector2(1, 1) },
-      u_size2: { value: new THREE.Vector2(1, 1) },
-      u_size3: { value: new THREE.Vector2(1, 1) },
-      u_size4: { value: new THREE.Vector2(1, 1) },
-    };
-    this.compositeScene = new THREE.Scene();
-    const compositeMesh = new THREE.Mesh(
-      this.quadGeometry,
-      new THREE.ShaderMaterial({
-        uniforms: this.compositeUniforms,
-        vertexShader: VERTEX_SHADER,
-        fragmentShader: COMPOSITE_FRAGMENT,
-      }),
-    );
-    compositeMesh.frustumCulled = false;
-    this.compositeScene.add(compositeMesh);
 
     this.frame = 0;
     this.running = true;
@@ -147,15 +187,32 @@ export class RenderEngine {
   }
 
   setOpacity(deckIndex, value) {
-    this.compositeUniforms[`u_mix${deckIndex + 1}`].value = value;
+    this.slotUniforms[deckIndex].mix.value = value;
   }
 
   setScale(deckIndex, value) {
-    this.compositeUniforms[`u_scale${deckIndex + 1}`].value = value;
+    this.slotUniforms[deckIndex].scale.value = value;
   }
 
   setSize(deckIndex, x, y) {
-    this.compositeUniforms[`u_size${deckIndex + 1}`].value.set(x, y);
+    this.slotUniforms[deckIndex].size.value.set(x, y);
+  }
+
+  setCrossfade(value) {
+    this.xfadeUniform.value = value;
+  }
+
+  setCueScene(sceneIndex) {
+    this.cueScene = sceneIndex;
+  }
+
+  // Attach/detach the master-out canvas (lives in a pop-out window; same
+  // renderer process, so the per-frame blit works exactly like the A/B views).
+  setMasterCanvas(canvas) {
+    this.views.master = {
+      canvas: canvas || null,
+      ctx: canvas ? canvas.getContext('2d') : null,
+    };
   }
 
   // Two-layer staging compile: a raw WebGL precompile catches syntax errors
@@ -168,7 +225,7 @@ export class RenderEngine {
 
     const precompileError = validateFragmentSource(gl, fullSource);
     if (precompileError) {
-      console.error('[PromptVJ] Staging precompile failed:', precompileError);
+      console.error('[Vizzy] Staging precompile failed:', precompileError);
       return { ok: false, error: precompileError };
     }
 
@@ -179,7 +236,7 @@ export class RenderEngine {
     this.shaderError = null;
     deck.mesh.material = stagingMaterial;
     this.sharedUniforms.u_resolution.value.set(this.previewWidth, this.previewHeight);
-    this.renderer.setRenderTarget(deck.previewTarget);
+    this.renderer.setRenderTarget(this.previewTarget);
     this.renderer.render(deck.scene, this.camera);
     this.renderer.setRenderTarget(null);
 
@@ -200,22 +257,22 @@ export class RenderEngine {
     return this.decks[deckIndex].body;
   }
 
-  // Snapshot of the deck's live preview canvas — pure 2D-canvas read, so
+  // Snapshot of a channel's live preview canvas — pure 2D-canvas read, so
   // saving a shader never touches the GL pipeline mid-performance.
-  getPreviewDataURL(deckIndex) {
-    const ctx = this.decks[deckIndex].previewCtx;
+  getPreviewDataURL(channelIndex) {
+    const ctx = this.previewSlots[channelIndex]?.ctx;
     return ctx ? ctx.canvas.toDataURL('image/jpeg', 0.75) : null;
   }
 
   syncPreviewCanvases() {
-    this.decks.forEach((deck) => {
-      if (!deck.previewCanvas) return;
-      deck.previewCanvas.width = this.previewWidth;
-      deck.previewCanvas.height = this.previewHeight;
+    this.previewSlots.forEach((slot) => {
+      if (!slot.canvas) return;
+      slot.canvas.width = this.previewWidth;
+      slot.canvas.height = this.previewHeight;
     });
   }
 
-  // Deck targets track the master window's aspect ratio, so shaders render at
+  // Deck targets track the scene views' aspect ratio, so shaders render at
   // the shape they're shown at; applied only once the aspect settles.
   maybeResizeDecks(aspect) {
     if (Math.abs(aspect - this.appliedAspect) < 0.01) {
@@ -241,28 +298,67 @@ export class RenderEngine {
 
     this.decks.forEach((deck) => {
       deck.target.setSize(this.deckWidth, this.deckHeight);
-      deck.previewTarget.setSize(this.previewWidth, this.previewHeight);
-      deck.previewBuffer = new Uint8Array(this.previewWidth * this.previewHeight * 4);
-      deck.previewImage = new ImageData(this.previewWidth, this.previewHeight);
     });
+    this.previewTarget.setSize(this.previewWidth, this.previewHeight);
+    this.previewBuffer = new Uint8Array(this.previewWidth * this.previewHeight * 4);
+    this.previewImage = new ImageData(this.previewWidth, this.previewHeight);
     this.syncPreviewCanvases();
+  }
+
+  // Render a composite pass on the hidden GL canvas, then copy it onto an
+  // on-screen 2D view canvas (GPU-side drawImage).
+  renderToView(compositeScene, view) {
+    if (!view?.ctx) return;
+    const { canvas, ctx } = view;
+    // the master canvas lives in another window — use ITS pixel ratio
+    const dpr = (canvas.ownerDocument.defaultView || window).devicePixelRatio || 1;
+    const pw = Math.round(canvas.clientWidth * dpr);
+    const ph = Math.round(canvas.clientHeight * dpr);
+    if (pw === 0 || ph === 0) return;
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw;
+      canvas.height = ph;
+    }
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(compositeScene, this.camera);
+
+    // aspect-preserving contain-fit: the GL canvas matches the A/B views
+    // exactly (no-op there) but the master monitor box may differ — letterbox
+    // instead of stretching.
+    const src = this.renderer.domElement;
+    const fit = Math.min(pw / src.width, ph / src.height);
+    const dw = Math.round(src.width * fit);
+    const dh = Math.round(src.height * fit);
+    if (dw !== pw || dh !== ph) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, pw, ph);
+    }
+    ctx.drawImage(src, Math.round((pw - dw) / 2), Math.round((ph - dh) / 2), dw, dh);
   }
 
   loop() {
     if (!this.running) return;
     this.frame += 1;
 
-    // master canvas renders at its true on-screen pixel size
-    const canvas = this.renderer.domElement;
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (width > 0 && height > 0) {
-      if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    // The master-out window, when open, is the primary view: it defines the
+    // render aspect AND resolution, so the output window is always filled
+    // edge-to-edge at native size while the in-app A/B views letterbox to
+    // match (contain-fit in renderToView). Resizing the master window
+    // re-shapes everything. With no master attached, the scene-A pane is
+    // the primary.
+    const masterCanvas = this.views.master?.canvas;
+    const primary =
+      masterCanvas && masterCanvas.isConnected ? masterCanvas : this.views.a?.canvas;
+    if (primary && primary.clientWidth > 0 && primary.clientHeight > 0) {
+      const dpr = (primary.ownerDocument.defaultView || window).devicePixelRatio || 1;
+      const glCanvas = this.renderer.domElement;
+      const pw = Math.round(primary.clientWidth * dpr);
+      const ph = Math.round(primary.clientHeight * dpr);
+      if (glCanvas.width !== pw || glCanvas.height !== ph) {
         this.renderer.setPixelRatio(dpr);
-        this.renderer.setSize(width, height, false);
+        this.renderer.setSize(primary.clientWidth, primary.clientHeight, false);
       }
-      this.maybeResizeDecks(width / height);
+      this.maybeResizeDecks(primary.clientWidth / primary.clientHeight);
     }
 
     this.sharedUniforms.u_time.value = this.clock.getElapsedTime();
@@ -280,37 +376,42 @@ export class RenderEngine {
       this.renderer.render(deck.scene, this.camera);
     });
 
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.compositeScene, this.camera);
+    this.renderToView(this.sceneComposites[0], this.views.a);
+    this.renderToView(this.sceneComposites[1], this.views.b);
+    this.renderToView(this.masterComposite, this.views.master);
 
-    // Round-robin: one deck preview per frame (~15fps each at 60fps) keeps
-    // the readPixels cost negligible.
-    this.updatePreview(this.decks[this.frame % this.decks.length]);
+    // Round-robin: one channel preview per frame (~15fps each at 60fps)
+    // keeps the readPixels cost negligible.
+    this.updatePreview(this.frame % CHANNELS);
 
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  updatePreview(deck) {
-    if (!deck.previewCtx) return;
+  updatePreview(channelIndex) {
+    const slot = this.previewSlots[channelIndex];
+    if (!slot?.ctx) return;
+    // previews always show the cued scene's channels
+    const deck = this.decks[this.cueScene * CHANNELS + channelIndex];
+
     this.sharedUniforms.u_resolution.value.set(this.previewWidth, this.previewHeight);
-    this.renderer.setRenderTarget(deck.previewTarget);
+    this.renderer.setRenderTarget(this.previewTarget);
     this.renderer.render(deck.scene, this.camera);
     this.renderer.setRenderTarget(null);
     this.renderer.readRenderTargetPixels(
-      deck.previewTarget,
+      this.previewTarget,
       0,
       0,
       this.previewWidth,
       this.previewHeight,
-      deck.previewBuffer,
+      this.previewBuffer,
     );
 
     // GL framebuffers are bottom-up; ImageData is top-down — flip rows.
     // Premultiply alpha into RGB (alpha = brightness, matching the composite
     // shader) so the preview shows exactly what the master mix will show.
     const rowBytes = this.previewWidth * 4;
-    const buf = deck.previewBuffer;
-    const out = deck.previewImage.data;
+    const buf = this.previewBuffer;
+    const out = this.previewImage.data;
     for (let y = 0; y < this.previewHeight; y += 1) {
       const srcRow = (this.previewHeight - 1 - y) * rowBytes;
       const dstRow = y * rowBytes;
@@ -322,7 +423,7 @@ export class RenderEngine {
         out[dstRow + x + 3] = 255;
       }
     }
-    deck.previewCtx.putImageData(deck.previewImage, 0, 0);
+    slot.ctx.putImageData(this.previewImage, 0, 0);
   }
 
   dispose() {
@@ -331,9 +432,10 @@ export class RenderEngine {
     this.decks.forEach((deck) => {
       deck.mesh.material.dispose();
       deck.target.dispose();
-      deck.previewTarget.dispose();
     });
-    this.compositeScene.children[0]?.material.dispose();
+    this.previewTarget.dispose();
+    this.sceneComposites.forEach((scene) => scene.children[0]?.material.dispose());
+    this.masterComposite.children[0]?.material.dispose();
     this.quadGeometry.dispose();
     this.renderer.dispose();
   }

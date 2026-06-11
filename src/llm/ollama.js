@@ -66,7 +66,7 @@ export class GenerationQueue {
       const raw = await this.request(job.prompt);
       job.onResponse(raw);
     } catch (err) {
-      console.error('[PromptVJ] Generation failed:', err);
+      console.error('[Vizzy] Generation failed:', err);
       this.onStatus(job.deckIndex, 'error', err.message || 'Generation failed');
     } finally {
       this.busy = false;

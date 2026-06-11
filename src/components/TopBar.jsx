@@ -1,6 +1,8 @@
 export function TopBar({
   libraryOpen,
   onToggleLibrary,
+  masterOpen,
+  onToggleMaster,
   audioActive,
   audioDevices,
   selectedDevice,
@@ -15,7 +17,7 @@ export function TopBar({
   return (
     <div className="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
       <h1 className="text-sm font-black tracking-widest text-cyan-400">
-        PROMPT<span className="text-neutral-200">VJ</span>
+        VIZ<span className="text-neutral-200">ZY</span>
       </h1>
 
       <button
@@ -28,6 +30,19 @@ export function TopBar({
         }`}
       >
         Library
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleMaster}
+        title="Open the crossfaded master output in its own window (double-click it for fullscreen)"
+        className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+          masterOpen
+            ? 'bg-amber-500 text-black hover:bg-amber-400'
+            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
+        }`}
+      >
+        {masterOpen ? '● Master Out' : 'Master Out'}
       </button>
 
       <div className="ml-4 flex items-center gap-2">

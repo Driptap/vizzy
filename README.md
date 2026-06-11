@@ -1,4 +1,4 @@
-# PromptVJ
+# Vizzy
 
 Local MVP desktop app for live VJing: write text prompts that a local LLM turns
 into GLSL fragment shaders, compiled on the fly across 4 decks, mixed with a
@@ -40,7 +40,7 @@ npm start            # production build + electron
    namelessly — no typing mid-performance; rename later. Right-click a saved
    shader for *Add to channel 1–4*, *Rename* (inline, in place of the label)
    and *Delete*. Shaders are stored as JSON files in
-   `<userData>/shaders/` (on macOS: `~/Library/Application Support/prompt-vj/shaders/`).
+   `<userData>/shaders/` (on macOS: `~/Library/Application Support/vizzy/shaders/`).
 
 ## Architecture
 

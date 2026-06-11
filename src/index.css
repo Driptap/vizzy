@@ -19,7 +19,7 @@ body {
   writing-mode: vertical-rl;
   direction: rtl;
   -webkit-appearance: slider-vertical;
-  width: 1.75rem;
+  width: 1.25rem;
   height: 100%;
   accent-color: #22d3ee;
   cursor: pointer;
