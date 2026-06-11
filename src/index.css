@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0a0a0a;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Vertical mixer fader: writing-mode is the modern path, the -webkit-
+   appearance value covers older Chromium. */
+.vert-slider {
+  writing-mode: vertical-rl;
+  direction: rtl;
+  -webkit-appearance: slider-vertical;
+  width: 1.75rem;
+  height: 100%;
+  accent-color: #22d3ee;
+  cursor: pointer;
+}
