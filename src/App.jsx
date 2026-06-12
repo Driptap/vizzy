@@ -30,6 +30,7 @@ import {
 } from './lib/shaderLibrary';
 import { loadModelObject } from './lib/modelLoader';
 import { loadSpriteTexture, makeSpriteThumbnail } from './lib/spriteLoader';
+import { seedExampleLibrary } from './lib/exampleSeed';
 
 const isShaderEntry = (e) => !e.kind;
 
@@ -56,6 +57,8 @@ export default function App() {
   const audioRef = useRef(null);
   const midiRef = useRef(null);
   const queueRef = useRef(null);
+  // per-slot {code, error} of the last failed generation, fuels Regenerate
+  const lastFailRef = useRef({});
   // fall back to the pre-rebrand (promptvj.*) keys so settings survive
   const modelRef = useRef(
     localStorage.getItem('vizzy.model') || localStorage.getItem('promptvj.model') || DEFAULT_MODEL,
@@ -289,24 +292,49 @@ export default function App() {
     [cueScene],
   );
 
+  const makeResponseHandler = useCallback(
+    (slot) => (raw) => {
+      const code = extractShaderCode(raw);
+      if (!code) {
+        const error = 'No GLSL main() block found in the model response';
+        lastFailRef.current[slot] = { code: String(raw).trim().slice(0, 4000), error };
+        setDeckState(slot, 'failed', error);
+        return;
+      }
+      setDeckState(slot, 'compiling');
+      const result = engineRef.current.stageShader(slot, code);
+      if (result.ok) {
+        delete lastFailRef.current[slot];
+        setDeckState(slot, 'active');
+        setSourceType(slot, 'shader');
+      } else {
+        lastFailRef.current[slot] = { code, error: result.error };
+        setDeckState(slot, 'failed', result.error);
+      }
+    },
+    [setDeckState, setSourceType],
+  );
+
   const handleGenerate = useCallback(
     (channel, prompt) => {
       const slot = cueScene * CHANNELS + channel;
-      queueRef.current?.enqueue(slot, prompt, (raw) => {
-        const code = extractShaderCode(raw);
-        if (!code) {
-          setDeckState(slot, 'failed', 'No GLSL main() block found in the model response');
-          return;
-        }
-        setDeckState(slot, 'compiling');
-        const result = engineRef.current.stageShader(slot, code);
-        if (result.ok) {
-          setDeckState(slot, 'active');
-          setSourceType(slot, 'shader');
-        } else setDeckState(slot, 'failed', result.error);
-      });
+      queueRef.current?.enqueue(slot, prompt, makeResponseHandler(slot));
     },
-    [setDeckState, setSourceType, cueScene],
+    [makeResponseHandler, cueScene],
+  );
+
+  // resend the prompt along with the failing code + error so the model can fix it
+  const handleRegenerate = useCallback(
+    (channel, prompt) => {
+      const slot = cueScene * CHANNELS + channel;
+      queueRef.current?.enqueue(
+        slot,
+        prompt,
+        makeResponseHandler(slot),
+        lastFailRef.current[slot] || null,
+      );
+    },
+    [makeResponseHandler, cueScene],
   );
 
   const handleSaveDeck = useCallback(
@@ -468,13 +496,15 @@ export default function App() {
     }
   }, [cueScene, library, prompts, opacities, muted, scales, sizes, fx, aut]);
 
-  // Load a deck preset into scene A or B: stage all 4 shaders and restore
-  // each channel's config; the sync effect pushes it to the engine.
-  const handleAssignDeck = useCallback(
-    (entry, scene) => {
+  // Load a deck preset into scene A or B: stage all 4 channels and restore
+  // each channel's config; the sync effect pushes it to the engine. Takes the
+  // entry list explicitly so the first-run seeder can call it before the
+  // library state has settled.
+  const assignDeckEntry = useCallback(
+    (entry, scene, entries) => {
       const engine = engineRef.current;
       if (!engine) return;
-      const byId = new Map(library.map((e) => [e.id, e]));
+      const byId = new Map(entries.map((e) => [e.id, e]));
       entry.channels.forEach(async (cfg, ch) => {
         const slot = scene * CHANNELS + ch;
         if (cfg.modelId) {
@@ -541,8 +571,33 @@ export default function App() {
       );
       setPrompts((prev) => forScene(prev, (c, v) => c.prompt ?? v));
     },
-    [library, setDeckState, setSourceType],
+    [setDeckState, setSourceType],
   );
+
+  const handleAssignDeck = useCallback(
+    (entry, scene) => assignDeckEntry(entry, scene, library),
+    [assignDeckEntry, library],
+  );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        let entries = await listShaders();
+        // first launch: create the example content and put it on scene A
+        if (!localStorage.getItem('vizzy.seeded')) {
+          const { deck, entries: seeded } = await seedExampleLibrary();
+          localStorage.setItem('vizzy.seeded', '1');
+          entries = [...seeded, ...entries];
+          setLibrary(entries);
+          assignDeckEntry(deck, 0, entries);
+          return;
+        }
+        setLibrary(entries);
+      } catch (err) {
+        console.warn('[Vizzy] Could not load shader library:', err);
+      }
+    })();
+  }, [assignDeckEntry]);
 
   const handleDeleteShader = useCallback(async (id) => {
     await deleteEntry({ id });
@@ -740,6 +795,7 @@ export default function App() {
                     applyAut(cueScene * CHANNELS + ch, effect, field, v)
                   }
                   onGenerate={handleGenerate}
+                  onRegenerate={handleRegenerate}
                   onSave={handleSaveDeck}
                   previewRef={(el) => {
                     previewRefs.current[channel] = el;

@@ -47,6 +47,7 @@ export function DeckModule({
   aut,
   onAutChange,
   onGenerate,
+  onRegenerate,
   onSave,
   previewRef,
 }) {
@@ -344,14 +345,37 @@ export function DeckModule({
         className="resize-none rounded border border-neutral-700 bg-neutral-950 p-2 text-xs text-neutral-200 placeholder-neutral-600 focus:border-cyan-500 focus:outline-none"
       />
 
-      <button
-        type="button"
-        onClick={generate}
-        disabled={busy || !prompt.trim()}
-        className="rounded bg-cyan-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
-      >
-        {busy ? badge.label : 'Generate'}
-      </button>
+      {status === 'failed' || status === 'error' ? (
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => prompt.trim() && onRegenerate(index, prompt.trim())}
+            disabled={!prompt.trim()}
+            title="Send the prompt plus the failing code and compiler error back to the model to fix"
+            className="flex-1 rounded bg-amber-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+          >
+            ⟲ Regenerate
+          </button>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={!prompt.trim()}
+            title="Generate from the prompt alone, ignoring the failed attempt"
+            className="flex-1 rounded bg-cyan-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+          >
+            Start fresh
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={generate}
+          disabled={busy || !prompt.trim()}
+          className="rounded bg-cyan-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+        >
+          {busy ? badge.label : 'Generate'}
+        </button>
+      )}
 
       {error && (
         <p className="line-clamp-2 text-[10px] leading-tight text-red-400" title={error}>

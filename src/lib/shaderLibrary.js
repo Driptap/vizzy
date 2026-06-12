@@ -134,6 +134,17 @@ export async function getSpriteFilePath(entry) {
   return path.join(dir, entry.file);
 }
 
+/** Model/sprite entry from in-memory bytes (used by the first-run seeder). */
+export async function saveAssetFromBuffer({ kind, name = '', bytes, ext, screenshot = null }) {
+  const dir = kind === 'model' ? await modelsDir() : await spritesDir();
+  const id = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const file = `${id}${ext}`;
+  await fs.writeFile(path.join(dir, file), bytes);
+  const entry = { id, kind, name, file, screenshot, createdAt: Date.now() };
+  await writeEntry(entry);
+  return entry;
+}
+
 export async function renameShader(entry, name) {
   const updated = { ...entry, name };
   await writeEntry(updated);

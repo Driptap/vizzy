@@ -66,7 +66,10 @@ Draw a function as an anti-aliased line:
           + 0.08 * sign(sin(p.x * 20.0)) * u_audio_high; // hard angular kinks
   float d = abs(p.y - y);
   float line = smoothstep(0.012, 0.004, d);
-Layer 2-3 such ribbons with phase offsets and slightly different brightness. Add sparse geometric obstacles riding the line (small squares/spikes): box(p - vec2(fract stepped x, y)). Keep the palette to one ink colour + background; flash inverted (1.0 - col) for a single frame feel when u_audio_low > 0.8. A subtle screen wobble — p += 0.005 * sin(u_time * 31.0) * u_audio_high — sells the hand-drawn jitter.`,
+Layer 2-3 such ribbons with phase offsets and slightly different brightness. Add sparse square obstacles riding the line:
+  float ox = fract(u_time * 0.15) * 2.0 - 1.0;
+  float obst = step(abs(p.x - ox), 0.02) * step(abs(p.y - y), 0.04);
+Keep the palette to one ink colour + background; flash inverted (1.0 - col) for a single frame feel when u_audio_low > 0.8. A subtle screen wobble — p += 0.005 * sin(u_time * 31.0) * u_audio_high — sells the hand-drawn jitter.`,
   },
   {
     id: 'winamp',

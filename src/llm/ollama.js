@@ -100,6 +100,11 @@ Additional hard rules:
   other layers.
 - There are NO texture samplers and no previous-frame buffer — everything must
   be procedural. Loops must have constant bounds.
+- This is GLSL ES 1.00: every float literal needs a decimal point (1.0, not 1);
+  function arguments must be floats (pow(x, 2.0), not pow(x, 2)); convert int
+  loop counters with float(i) before using them in float math.
+- Do NOT use Shadertoy conventions: no mainImage, iTime, iResolution, iChannel.
+  Use void main(), u_time and u_resolution.
 - You may define helper functions, #defines and consts above void main().`;
 
 const REQUEST_TIMEOUT_MS = 120000;
@@ -129,10 +134,10 @@ export class GenerationQueue {
    * @param {(rawResponse: string) => void} onResponse called with the raw LLM
    *   text; the caller owns parsing/compiling and subsequent status updates.
    */
-  enqueue(deckIndex, prompt, onResponse) {
+  enqueue(deckIndex, prompt, onResponse, repair = null) {
     // a re-click replaces that deck's pending job rather than stacking
     this.queue = this.queue.filter((job) => job.deckIndex !== deckIndex);
-    this.queue.push({ deckIndex, prompt, onResponse });
+    this.queue.push({ deckIndex, prompt, onResponse, repair });
     this.onStatus(deckIndex, 'queued');
     this.pump();
   }
@@ -145,7 +150,7 @@ export class GenerationQueue {
 
     try {
       this.onStatus(job.deckIndex, 'generating');
-      const raw = await this.request(job.prompt);
+      const raw = await this.request(job.prompt, job.repair);
       job.onResponse(raw);
     } catch (err) {
       console.error('[Vizzy] Generation failed:', err);
@@ -156,7 +161,7 @@ export class GenerationQueue {
     }
   }
 
-  async request(userPrompt) {
+  async request(userPrompt, repair = null) {
     // Append at most ONE style recipe, and only when the prompt matches —
     // keeps the local model's context small while raising genre quality.
     const recipe = selectRecipe(userPrompt);
@@ -164,6 +169,14 @@ export class GenerationQueue {
     const system = recipe
       ? `${SYSTEM_PROMPT}\n\n## Style guidance — ${recipe.title}\n${recipe.guidance}`
       : SYSTEM_PROMPT;
+
+    let fullPrompt = `${system}\n\nUser request: ${userPrompt}`;
+    if (repair) {
+      fullPrompt +=
+        `\n\nYour previous shader for this request FAILED. Fix it and return the` +
+        ` corrected, complete fragment shader code only.\n\nPrevious code:\n${repair.code}` +
+        `\n\nError:\n${repair.error}`;
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -174,7 +187,7 @@ export class GenerationQueue {
         signal: controller.signal,
         body: JSON.stringify({
           model: this.getModel(),
-          prompt: `${system}\n\nUser request: ${userPrompt}`,
+          prompt: fullPrompt,
           stream: false,
         }),
       });
