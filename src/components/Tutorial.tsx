@@ -33,7 +33,7 @@ const STEPS = [
   },
 ];
 
-export function Tutorial({ open, onClose }) {
+export function Tutorial({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -42,7 +42,7 @@ export function Tutorial({ open, onClose }) {
 
   useEffect(() => {
     if (!open) return undefined;
-    const onKey = (e) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
       if (e.key === 'ArrowRight') setStep((s) => Math.min(STEPS.length - 1, s + 1));
       if (e.key === 'ArrowLeft') setStep((s) => Math.max(0, s - 1));

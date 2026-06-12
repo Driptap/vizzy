@@ -7,16 +7,17 @@ import {
   setBaseUrl,
 } from '../llm/ollama';
 import { MODEL_CATALOG } from '../llm/models';
+import type { PullProgress } from '../llm/ollama';
 
 const { ipcRenderer } = window.require('electron');
 
-function fmtBytes(n) {
+function fmtBytes(n: number | undefined): string {
   if (!n) return '…';
   const gb = n / 1024 ** 3;
   return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
 }
 
-function ProgressBar({ value }) {
+function ProgressBar({ value }: { value: number }) {
   return (
     <div className="h-2 w-full overflow-hidden rounded bg-neutral-800">
       <div
@@ -33,14 +34,29 @@ function ProgressBar({ value }) {
  * (user's own 11434 wins) -> else offer a managed download -> pick a model
  * from the catalog -> pull it with progress -> hand back to the app.
  */
-export function SetupScreen({ model, onModelChange, onReady, onSkip }) {
-  const [stage, setStage] = useState('probing'); // probing | no-server | installing | starting | model | pulling
-  const [error, setError] = useState(null);
-  const [installed, setInstalled] = useState([]);
+interface SetupScreenProps {
+  model: string;
+  onModelChange: (tag: string) => void;
+  onReady: () => void;
+  onSkip: () => void;
+}
+
+type Stage = 'probing' | 'no-server' | 'installing' | 'starting' | 'model' | 'pulling';
+
+interface DownloadProgress {
+  received: number;
+  total: number;
+  extracting?: boolean;
+}
+
+export function SetupScreen({ model, onModelChange, onReady, onSkip }: SetupScreenProps) {
+  const [stage, setStage] = useState<Stage>('probing');
+  const [error, setError] = useState<string | null>(null);
+  const [installed, setInstalled] = useState<string[]>([]);
   const [selected, setSelected] = useState(
-    MODEL_CATALOG.some((m) => m.tag === model) ? model : MODEL_CATALOG.find((m) => m.default).tag,
+    MODEL_CATALOG.some((m) => m.tag === model) ? model : MODEL_CATALOG.find((m) => m.default)!.tag,
   );
-  const [download, setDownload] = useState({ received: 0, total: 0 });
+  const [download, setDownload] = useState<DownloadProgress>({ received: 0, total: 0 });
   const [pull, setPull] = useState({ status: '', completed: 0, total: 0 });
   const [ownOllama, setOwnOllama] = useState(false);
   const probingRef = useRef(false);
@@ -83,7 +99,7 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }) {
   const handleInstall = useCallback(async () => {
     setStage('installing');
     setError(null);
-    const onProgress = (_evt, p) => {
+    const onProgress = (_evt: unknown, p: { phase: string; received: number; total: number }) => {
       if (p.phase === 'download') setDownload({ received: p.received, total: p.total });
       if (p.phase === 'extract') setDownload((d) => ({ ...d, extracting: true }));
     };
@@ -98,7 +114,7 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }) {
       setInstalled(tags);
       setStage('model');
     } catch (err) {
-      setError(err.message || String(err));
+      setError((err as Error).message || String(err));
       setStage('no-server');
     } finally {
       ipcRenderer.removeListener('vizzy:ollama-progress', onProgress);
@@ -115,18 +131,18 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }) {
     setStage('pulling');
     setError(null);
     try {
-      await pullModel(tag, (evt) =>
-        setPull({ status: evt.status, completed: evt.completed || 0, total: evt.total || 0 }),
+      await pullModel(tag, (evt: PullProgress) =>
+        setPull({ status: evt.status || '', completed: evt.completed || 0, total: evt.total || 0 }),
       );
       onModelChange(tag);
       onReady();
     } catch (err) {
-      setError(err.message || String(err));
+      setError((err as Error).message || String(err));
       setStage('model');
     }
   }, [selected, installed, onModelChange, onReady]);
 
-  const isInstalled = (tag) => installed.includes(tag) || installed.includes(`${tag}:latest`);
+  const isInstalled = (tag: string) => installed.includes(tag) || installed.includes(`${tag}:latest`);
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-950/95 p-6">

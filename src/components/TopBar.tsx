@@ -3,6 +3,27 @@ import { MODEL_CATALOG } from '../llm/models';
 
 const CUSTOM = '__custom__';
 
+interface TopBarProps {
+  libraryOpen: boolean;
+  onToggleLibrary: () => void;
+  masterOpen: boolean;
+  onToggleMaster: () => void;
+  audioActive: boolean;
+  audioDevices: MediaDeviceInfo[];
+  selectedDevice: string;
+  onSelectDevice: (deviceId: string) => void;
+  onToggleAudio: () => void;
+  model: string;
+  onModelChange: (tag: string) => void;
+  installedModels: string[];
+  llmReady: boolean;
+  onOpenSetup: () => void;
+  midiLearn: boolean;
+  onToggleMidiLearn: () => void;
+  midiInputs: number;
+  onOpenTutorial: () => void;
+}
+
 export function TopBar({
   libraryOpen,
   onToggleLibrary,
@@ -22,7 +43,7 @@ export function TopBar({
   onToggleMidiLearn,
   midiInputs,
   onOpenTutorial,
-}) {
+}: TopBarProps) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
   const showCustom = customMode || !inCatalog;

@@ -1,57 +1,64 @@
-const STORAGE_KEY = 'vizzy.midiBindings';
-const LEGACY_STORAGE_KEY = 'promptvj.midiBindings'; // pre-rebrand fallback
+import { getStored, setStored } from '../lib/storage';
+
+const STORAGE_KEY = 'midiBindings';
 
 const CC_STATUS = 0xb0;
 
+export interface MidiHandlers {
+  /** value normalized 0..1 */
+  onControlValue?: (controlId: string, value: number) => void;
+  onLearned?: (controlId: string, cc: number) => void;
+}
+
+/** CC number (as a string key) -> bound control id */
+type Bindings = Record<string, string>;
+
 export class MidiEngine {
-  /**
-   * @param {object} handlers
-   * @param {(controlId: string, value: number) => void} handlers.onControlValue value normalized 0..1
-   * @param {(controlId: string, cc: number) => void} handlers.onLearned
-   */
-  constructor({ onControlValue, onLearned }) {
+  onControlValue?: MidiHandlers['onControlValue'];
+  onLearned?: MidiHandlers['onLearned'];
+  access: MIDIAccess | null = null;
+  armedControl: string | null = null;
+  bindings: Bindings;
+
+  constructor({ onControlValue, onLearned }: MidiHandlers) {
     this.onControlValue = onControlValue;
     this.onLearned = onLearned;
-    this.access = null;
-    this.armedControl = null;
     try {
-      this.bindings =
-        JSON.parse(
-          localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY),
-        ) || {};
+      this.bindings = JSON.parse(getStored(STORAGE_KEY) ?? '') || {};
     } catch {
       this.bindings = {};
     }
     this.handleMessage = this.handleMessage.bind(this);
   }
 
-  async init() {
+  async init(): Promise<MIDIAccess> {
     this.access = await navigator.requestMIDIAccess();
     this.attachInputs();
     this.access.onstatechange = () => this.attachInputs();
     return this.access;
   }
 
-  attachInputs() {
+  attachInputs(): void {
     if (!this.access) return;
     this.access.inputs.forEach((input) => {
       input.onmidimessage = this.handleMessage;
     });
   }
 
-  get inputCount() {
+  get inputCount(): number {
     return this.access ? this.access.inputs.size : 0;
   }
 
-  arm(controlId) {
+  arm(controlId: string): void {
     this.armedControl = controlId;
   }
 
-  disarm() {
+  disarm(): void {
     this.armedControl = null;
   }
 
-  handleMessage(event) {
+  handleMessage(event: MIDIMessageEvent): void {
+    if (!event.data) return;
     const [status, cc, value] = event.data;
     if ((status & 0xf0) !== CC_STATUS) return;
 
@@ -61,7 +68,7 @@ export class MidiEngine {
         .filter((key) => this.bindings[key] === this.armedControl)
         .forEach((key) => delete this.bindings[key]);
       this.bindings[cc] = this.armedControl;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.bindings));
+      setStored(STORAGE_KEY, JSON.stringify(this.bindings));
       const learned = this.armedControl;
       this.armedControl = null;
       this.onLearned?.(learned, cc);
@@ -73,15 +80,15 @@ export class MidiEngine {
   }
 
   // inverted view for UI labels: { controlId: cc }
-  controlMap() {
-    const map = {};
+  controlMap(): Record<string, number> {
+    const map: Record<string, number> = {};
     Object.entries(this.bindings).forEach(([cc, control]) => {
       map[control] = Number(cc);
     });
     return map;
   }
 
-  dispose() {
+  dispose(): void {
     if (this.access) {
       this.access.inputs.forEach((input) => {
         input.onmidimessage = null;

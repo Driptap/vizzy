@@ -3,6 +3,19 @@ const SCENE_META = [
   { letter: 'B', accent: 'fuchsia' },
 ];
 
+interface StripProps {
+  label: string;
+  controlId: string;
+  value: number;
+  isMuted: boolean;
+  midiLearn: boolean;
+  armed: boolean;
+  cc?: number;
+  onChange: (value: number) => void;
+  onArm: (controlId: string) => void;
+  onToggleMute: () => void;
+}
+
 function Strip({
   label,
   controlId,
@@ -14,7 +27,7 @@ function Strip({
   onChange,
   onArm,
   onToggleMute,
-}) {
+}: StripProps) {
   return (
     <div className="flex min-h-0 flex-col items-center gap-1.5">
       <div
@@ -64,8 +77,24 @@ function Strip({
   );
 }
 
+interface MixerProps {
+  /** 8 values: A1-A4 then B1-B4 */
+  opacities: number[];
+  muted: boolean[];
+  onChange: (slot: number, value: number) => void;
+  onToggleMute: (slot: number) => void;
+  crossfade: number;
+  onCrossfadeChange: (value: number) => void;
+  cueScene: number;
+  onCue: (scene: number) => void;
+  midiLearn: boolean;
+  armedControl: string | null;
+  onArm: (controlId: string) => void;
+  controlMap: Record<string, number>;
+}
+
 export function Mixer({
-  opacities, // 8 values: A1-A4 then B1-B4
+  opacities,
   muted,
   onChange,
   onToggleMute,
@@ -77,7 +106,7 @@ export function Mixer({
   armedControl,
   onArm,
   controlMap,
-}) {
+}: MixerProps) {
   const xfadeArmed = armedControl === 'xfade';
   const xfadeCc = controlMap.xfade;
 

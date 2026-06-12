@@ -4,13 +4,15 @@ const fs = window.require('fs/promises');
 
 export const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
-async function fileBitmap(filePath) {
+async function fileBitmap(filePath: string): Promise<ImageBitmap> {
   const buf = await fs.readFile(filePath);
-  return createImageBitmap(new Blob([buf]));
+  return createImageBitmap(new Blob([buf as unknown as BlobPart]));
 }
 
 /** Image file -> texture for the sprite quad (alpha preserved). */
-export async function loadSpriteTexture(filePath) {
+export async function loadSpriteTexture(
+  filePath: string,
+): Promise<{ texture: THREE.Texture; aspect: number }> {
   const bitmap = await fileBitmap(filePath);
   const texture = new THREE.CanvasTexture(bitmap);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -18,7 +20,7 @@ export async function loadSpriteTexture(filePath) {
 }
 
 /** Downscaled library thumbnail (flattened onto black, like the renderer). */
-export async function makeSpriteThumbnail(filePath) {
+export async function makeSpriteThumbnail(filePath: string): Promise<string | null> {
   try {
     const bitmap = await fileBitmap(filePath);
     const width = 160;
@@ -26,7 +28,7 @@ export async function makeSpriteThumbnail(filePath) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(bitmap, 0, 0, width, height);

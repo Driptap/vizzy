@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const fs = window.require('fs/promises');
 const path = window.require('path');
@@ -17,7 +18,7 @@ export const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
  * - .gltf with external .bin/textures will fail to resolve those resources
  * - .obj/.stl get MeshNormalMaterial (no .mtl support; always visible)
  */
-export async function loadModelObject(filePath) {
+export async function loadModelObject(filePath: string): Promise<THREE.Object3D> {
   const ext = path.extname(filePath).toLowerCase();
   const buf = await fs.readFile(filePath);
   const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -25,7 +26,7 @@ export async function loadModelObject(filePath) {
   switch (ext) {
     case '.glb':
     case '.gltf': {
-      const gltf = await new Promise((resolve, reject) => {
+      const gltf = await new Promise<GLTF>((resolve, reject) => {
         new GLTFLoader().parse(arrayBuffer, '', resolve, reject);
       });
       return gltf.scene || gltf.scenes?.[0];
@@ -33,7 +34,9 @@ export async function loadModelObject(filePath) {
     case '.obj': {
       const object = new OBJLoader().parse(new TextDecoder().decode(arrayBuffer));
       object.traverse((node) => {
-        if (node.isMesh) node.material = new THREE.MeshNormalMaterial();
+        if ((node as THREE.Mesh).isMesh) {
+          (node as THREE.Mesh).material = new THREE.MeshNormalMaterial();
+        }
       });
       return object;
     }

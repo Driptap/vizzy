@@ -5,16 +5,28 @@ const SWEEP = 270;
 const SIZE = 38;
 const RADIUS = 14;
 
-function angleToPoint(cx, cy, r, deg) {
+function angleToPoint(cx: number, cy: number, r: number, deg: number): [number, number] {
   const rad = (deg * Math.PI) / 180;
   return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)];
 }
 
-function arcPath(cx, cy, r, fromDeg, toDeg) {
+function arcPath(cx: number, cy: number, r: number, fromDeg: number, toDeg: number): string {
   const [x1, y1] = angleToPoint(cx, cy, r, fromDeg);
   const [x2, y2] = angleToPoint(cx, cy, r, toDeg);
   const large = toDeg - fromDeg > 180 ? 1 : 0;
   return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+}
+
+interface KnobProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  defaultValue: number;
+  onChange: (value: number) => void;
+  format?: (value: number) => string;
+  bipolar?: boolean;
+  accent?: string;
 }
 
 /**
@@ -32,9 +44,9 @@ export function Knob({
   format,
   bipolar = false,
   accent = '#22d3ee',
-}) {
-  const dragRef = useRef(null);
-  const clamp = (v) => Math.min(max, Math.max(min, v));
+}: KnobProps) {
+  const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
 
   const frac = (value - min) / (max - min);
   const angle = START + frac * SWEEP;

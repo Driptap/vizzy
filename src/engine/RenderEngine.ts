@@ -9,15 +9,16 @@ import {
   SPRITE_VERTEX,
   SPRITE_FRAGMENT,
 } from './shaders';
+import { CHANNELS, SCENES, INITIAL_OPACITIES, makeDefaultAut } from '../lib/channels';
+import { validateFragmentSource } from './glValidate';
+import { animateModelDeck, animateSpriteDeck } from './automation';
+import { makeCompositeScene, sceneUniformSet, masterUniformSet } from './compositor';
+import { flipAndPremultiply } from './preview';
+import type { AudioBand, AutomationMap, ChannelSource, StageResult } from '../types';
+import type { BlitView, Deck, DeckAudioUniforms, SlotUniforms } from './types';
+import type { AudioEngine } from './AudioEngine';
 
-// channel automation (sprites AND models): per effect {amt: 0..1, audio: bool}
-// — audio couples the effect to the deck's routed level, otherwise it
-// self-runs on time LFOs
-const makeDefaultAut = () =>
-  Object.fromEntries(['scl', 'rot', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]));
-
-export const CHANNELS = 4; // channels per scene
-export const SCENES = 2; // A (decks 0-3) and B (decks 4-7)
+export { CHANNELS, SCENES };
 
 const BASE_DECK_WIDTH = 960;
 const BASE_PREVIEW_WIDTH = 160;
@@ -26,26 +27,75 @@ const FALLBACK_ASPECT = 16 / 9;
 // reallocated — avoids thrashing GPU memory during a window-resize drag
 const ASPECT_SETTLE_FRAMES = 12;
 
-function validateFragmentSource(gl, source) {
-  const shader = gl.createShader(gl.FRAGMENT_SHADER);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  const ok = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
-  const log = ok ? null : gl.getShaderInfoLog(shader) || 'Unknown shader compile error';
-  gl.deleteShader(shader);
-  return log;
+interface ViewCanvases {
+  a: HTMLCanvasElement | null;
+  b: HTMLCanvasElement | null;
+}
+
+interface AudioRoute {
+  band: AudioBand;
+  amt: number;
 }
 
 export class RenderEngine {
+  audioEngine: AudioEngine | null;
+  renderer: THREE.WebGLRenderer;
+  views: Record<string, BlitView>;
+  shaderError: string | null;
+  clock: THREE.Clock;
+  camera: THREE.OrthographicCamera;
+  quadGeometry: THREE.PlaneGeometry;
+  spriteGeometry: THREE.PlaneGeometry;
+  sharedUniforms: {
+    u_time: THREE.IUniform<number>;
+    u_resolution: THREE.IUniform<THREE.Vector2>;
+  };
+  deckAudioUniforms: DeckAudioUniforms[];
+  audioRouting: AudioRoute[];
+  appliedAspect: number;
+  pendingAspect: number | null;
+  aspectStableFrames: number;
+  deckWidth: number;
+  deckHeight: number;
+  previewWidth: number;
+  previewHeight: number;
+  decks: Deck[];
+  automation: AutomationMap[];
+  modelCamera: THREE.PerspectiveCamera;
+  slotUniforms: SlotUniforms[];
+  xfadeUniform: THREE.IUniform<number>;
+  aspectUniform: THREE.IUniform<number>;
+  sceneComposites: THREE.Scene[];
+  masterComposite: THREE.Scene;
+  previewUniforms: {
+    u_tex: THREE.IUniform<THREE.Texture | null>;
+    u_scale: THREE.IUniform<number>;
+    u_size: THREE.IUniform<THREE.Vector2>;
+    u_fx: THREE.IUniform<THREE.Vector4>;
+    u_aspect: THREE.IUniform<number>;
+  };
+  previewScene: THREE.Scene;
+  cueScene: number;
+  previewSlots: BlitView[];
+  previewTarget: THREE.WebGLRenderTarget;
+  previewBuffer: Uint8Array;
+  previewImage: ImageData;
+  frame: number;
+  running: boolean;
+  raf: number;
+  lastFrameTime?: number;
+
   /**
-   * @param {{a: HTMLCanvasElement, b: HTMLCanvasElement}} viewCanvases
-   *   2D canvases the scene composites are blitted onto. The crossfaded
-   *   master is attached separately via setMasterCanvas (it lives in its own
-   *   pop-out window).
-   * @param {HTMLCanvasElement[]} previewCanvases 4 deck thumbnails (cued scene)
-   * @param {AudioEngine} audioEngine
+   * @param viewCanvases 2D canvases the scene composites are blitted onto.
+   *   The crossfaded master is attached separately via setMasterCanvas (it
+   *   lives in its own pop-out window).
+   * @param previewCanvases 4 deck thumbnails (cued scene)
    */
-  constructor(viewCanvases, previewCanvases, audioEngine) {
+  constructor(
+    viewCanvases: ViewCanvases,
+    previewCanvases: (HTMLCanvasElement | null)[],
+    audioEngine: AudioEngine | null,
+  ) {
     this.audioEngine = audioEngine;
     // The GL canvas is never shown: one context renders every composite pass
     // and the result is blitted to the on-screen 2D view canvases (a WebGL
@@ -92,7 +142,7 @@ export class RenderEngine {
     }));
     // band: which global band feeds this deck's u_audio_level; amt: response
     // multiplier (applied to all four uniforms, clamped to the 0..1 contract)
-    this.audioRouting = DEFAULT_DECK_BODIES.map(() => ({ band: 'level', amt: 1 }));
+    this.audioRouting = DEFAULT_DECK_BODIES.map(() => ({ band: 'level' as AudioBand, amt: 1 }));
 
     const viewA = this.views.a?.canvas;
     const initialAspect =
@@ -129,7 +179,7 @@ export class RenderEngine {
       target.texture.wrapS = THREE.MirroredRepeatWrapping;
       target.texture.wrapT = THREE.MirroredRepeatWrapping;
 
-      return { scene, mesh, body, target, mode: 'shader', model: null, sprite: null };
+      return { scene, mesh, body, target, mode: 'shader' as const, model: null, sprite: null };
     });
 
     this.spriteGeometry = new THREE.PlaneGeometry(1, 1);
@@ -148,7 +198,7 @@ export class RenderEngine {
     // composites and the master composite — one write reaches all of them.
     this.slotUniforms = this.decks.map((deck, i) => ({
       deck: { value: deck.target.texture },
-      mix: { value: i % CHANNELS === 0 ? 1 : 0 },
+      mix: { value: INITIAL_OPACITIES[i] },
       scale: { value: 1 },
       size: { value: new THREE.Vector2(1, 1) },
       // x = tilt (rad), y = contrast, z = hue (rad), w = saturation
@@ -157,42 +207,18 @@ export class RenderEngine {
     this.xfadeUniform = { value: 0 };
     this.aspectUniform = { value: this.deckWidth / this.deckHeight };
 
-    const sceneUniformSet = (sceneIndex) => {
-      const uniforms = { u_aspect: this.aspectUniform };
-      for (let ch = 0; ch < CHANNELS; ch += 1) {
-        const slot = this.slotUniforms[sceneIndex * CHANNELS + ch];
-        uniforms[`u_deck${ch + 1}`] = slot.deck;
-        uniforms[`u_mix${ch + 1}`] = slot.mix;
-        uniforms[`u_scale${ch + 1}`] = slot.scale;
-        uniforms[`u_size${ch + 1}`] = slot.size;
-        uniforms[`u_fx${ch + 1}`] = slot.fx;
-      }
-      return uniforms;
-    };
-    const masterUniforms = { u_xfade: this.xfadeUniform, u_aspect: this.aspectUniform };
-    this.slotUniforms.forEach((slot, i) => {
-      masterUniforms[`u_deck${i + 1}`] = slot.deck;
-      masterUniforms[`u_mix${i + 1}`] = slot.mix;
-      masterUniforms[`u_scale${i + 1}`] = slot.scale;
-      masterUniforms[`u_size${i + 1}`] = slot.size;
-      masterUniforms[`u_fx${i + 1}`] = slot.fx;
-    });
-
-    const makeCompositeScene = (uniforms, fragmentShader) => {
-      const scene = new THREE.Scene();
-      const mesh = new THREE.Mesh(
+    this.sceneComposites = [0, 1].map((scene) =>
+      makeCompositeScene(
         this.quadGeometry,
-        new THREE.ShaderMaterial({ uniforms, vertexShader: VERTEX_SHADER, fragmentShader }),
-      );
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-      return scene;
-    };
-    this.sceneComposites = [
-      makeCompositeScene(sceneUniformSet(0), SCENE_FRAGMENT),
-      makeCompositeScene(sceneUniformSet(1), SCENE_FRAGMENT),
-    ];
-    this.masterComposite = makeCompositeScene(masterUniforms, COMPOSITE_FRAGMENT);
+        sceneUniformSet(this.slotUniforms, this.aspectUniform, scene),
+        SCENE_FRAGMENT,
+      ),
+    );
+    this.masterComposite = makeCompositeScene(
+      this.quadGeometry,
+      masterUniformSet(this.slotUniforms, this.aspectUniform, this.xfadeUniform),
+      COMPOSITE_FRAGMENT,
+    );
 
     // preview transform pass: one material, retargeted per deck each use
     this.previewUniforms = {
@@ -202,7 +228,7 @@ export class RenderEngine {
       u_fx: { value: new THREE.Vector4(0, 1, 0, 1) },
       u_aspect: this.aspectUniform,
     };
-    this.previewScene = makeCompositeScene(this.previewUniforms, PREVIEW_FRAGMENT);
+    this.previewScene = makeCompositeScene(this.quadGeometry, this.previewUniforms, PREVIEW_FRAGMENT);
 
     // The 4 on-screen preview canvases show the *cued* scene's channels; one
     // shared scratch target + buffer serves all of them (and staging compiles).
@@ -227,7 +253,7 @@ export class RenderEngine {
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  buildDeckMaterial(body, deckIndex) {
+  buildDeckMaterial(body: string, deckIndex: number): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
       // spreads copy the *references* to the {value} objects: time/resolution
       // are global, audio comes from this deck's routed set
@@ -237,38 +263,42 @@ export class RenderEngine {
     });
   }
 
-  setOpacity(deckIndex, value) {
+  setOpacity(deckIndex: number, value: number): void {
     this.slotUniforms[deckIndex].mix.value = value;
   }
 
-  setScale(deckIndex, value) {
+  setScale(deckIndex: number, value: number): void {
     this.slotUniforms[deckIndex].scale.value = value;
   }
 
-  setSize(deckIndex, x, y) {
+  setSize(deckIndex: number, x: number, y: number): void {
     this.slotUniforms[deckIndex].size.value.set(x, y);
   }
 
-  setCrossfade(value) {
+  setCrossfade(value: number): void {
     this.xfadeUniform.value = value;
   }
 
   // tilt and hue in radians
-  setChannelFx(deckIndex, tilt, contrast, hue, sat) {
+  setChannelFx(deckIndex: number, tilt: number, contrast: number, hue: number, sat: number): void {
     this.slotUniforms[deckIndex].fx.value.set(tilt, contrast, hue, sat);
   }
 
-  setAudioRouting(deckIndex, band, amt) {
+  setAudioRouting(deckIndex: number, band: AudioBand, amt: number): void {
     this.audioRouting[deckIndex] = { band, amt };
   }
 
-  setCueScene(sceneIndex) {
+  setCueScene(sceneIndex: number): void {
     this.cueScene = sceneIndex;
+  }
+
+  setAutomation(deckIndex: number, aut: AutomationMap): void {
+    this.automation[deckIndex] = aut;
   }
 
   // Attach/detach the master-out canvas (lives in a pop-out window; same
   // renderer process, so the per-frame blit works exactly like the A/B views).
-  setMasterCanvas(canvas) {
+  setMasterCanvas(canvas: HTMLCanvasElement | null): void {
     this.views.master = {
       canvas: canvas || null,
       ctx: canvas ? canvas.getContext('2d') : null,
@@ -279,7 +309,7 @@ export class RenderEngine {
   // cheaply, then a hidden render of the staging material through three.js
   // catches anything the precompile context misses. The active material is
   // only swapped (and disposed) if both pass.
-  stageShader(deckIndex, body) {
+  stageShader(deckIndex: number, body: string): StageResult {
     const gl = this.renderer.getContext();
     const fullSource = buildFragmentShader(body);
 
@@ -319,7 +349,7 @@ export class RenderEngine {
   // Put an image on a deck: centered quad preserving the image's aspect
   // within the render frame, alpha respected, scale-pulsing with the deck's
   // routed audio.
-  stageSprite(deckIndex, texture, imageAspect, spriteId) {
+  stageSprite(deckIndex: number, texture: THREE.Texture, imageAspect: number, spriteId: string): StageResult {
     const deck = this.decks[deckIndex];
     // pre-upload the image to the GPU so the swap frame doesn't hitch
     this.renderer.initTexture(texture);
@@ -359,7 +389,7 @@ export class RenderEngine {
   // Sizes are in aspect-isotropic units (equal pixels per unit on both axes);
   // the container converts them to the ortho camera's stretched NDC space.
   // Contain-fit to ~85% of the frame.
-  updateSpriteLayout(deck) {
+  updateSpriteLayout(deck: Deck): void {
     if (!deck.sprite) return;
     const viewAspect = this.aspectUniform.value || 1;
     deck.sprite.container.scale.set(1 / viewAspect, 1, 1);
@@ -368,15 +398,11 @@ export class RenderEngine {
     deck.sprite.baseH = h;
   }
 
-  disposeSprite(deck) {
+  disposeSprite(deck: Deck): void {
     if (!deck.sprite) return;
-    deck.sprite.mesh.material.uniforms.u_map.value?.dispose();
+    (deck.sprite.mesh.material.uniforms.u_map.value as THREE.Texture | null)?.dispose();
     deck.sprite.mesh.material.dispose();
     deck.sprite = null;
-  }
-
-  setAutomation(deckIndex, aut) {
-    this.automation[deckIndex] = aut;
   }
 
   // Put a loaded 3D object on a deck: auto-centered and normalized to the
@@ -384,7 +410,7 @@ export class RenderEngine {
   // Async on purpose: shaders are pre-compiled in parallel and buffers
   // pre-uploaded BEFORE the swap, so the running visuals never stall on the
   // first frame of a new model. The old content keeps playing until ready.
-  async stageModel(deckIndex, object3D, modelId) {
+  async stageModel(deckIndex: number, object3D: THREE.Object3D, modelId: string): Promise<StageResult> {
     const deck = this.decks[deckIndex];
 
     const box = new THREE.Box3().setFromObject(object3D);
@@ -430,18 +456,19 @@ export class RenderEngine {
     return { ok: true };
   }
 
-  disposeModel(deck) {
+  disposeModel(deck: Deck): void {
     if (!deck.model) return;
     deck.model.scene.traverse((node) => {
-      node.geometry?.dispose?.();
-      const materials = Array.isArray(node.material)
-        ? node.material
-        : node.material
-          ? [node.material]
+      const obj = node as THREE.Mesh;
+      obj.geometry?.dispose?.();
+      const materials = Array.isArray(obj.material)
+        ? obj.material
+        : obj.material
+          ? [obj.material]
           : [];
       materials.forEach((material) => {
         Object.values(material).forEach((value) => {
-          if (value?.isTexture) value.dispose();
+          if ((value as THREE.Texture | null)?.isTexture) (value as THREE.Texture).dispose();
         });
         material.dispose();
       });
@@ -449,12 +476,12 @@ export class RenderEngine {
     deck.model = null;
   }
 
-  getShaderBody(deckIndex) {
+  getShaderBody(deckIndex: number): string {
     return this.decks[deckIndex].body;
   }
 
   // What's running on a slot — used by deck-preset save
-  getChannelSource(deckIndex) {
+  getChannelSource(deckIndex: number): ChannelSource {
     const deck = this.decks[deckIndex];
     if (deck.mode === 'model' && deck.model) {
       return { type: 'model', modelId: deck.model.modelId };
@@ -467,24 +494,24 @@ export class RenderEngine {
 
   // Snapshot of a channel's live preview canvas — pure 2D-canvas read, so
   // saving a shader never touches the GL pipeline mid-performance.
-  getPreviewDataURL(channelIndex) {
+  getPreviewDataURL(channelIndex: number): string | null {
     const ctx = this.previewSlots[channelIndex]?.ctx;
     return ctx ? ctx.canvas.toDataURL('image/jpeg', 0.75) : null;
   }
 
   // Downscaled snapshot of a scene view (the A/B composite) for deck-preset
   // thumbnails — also a pure 2D-canvas read.
-  getSceneDataURL(sceneIndex) {
+  getSceneDataURL(sceneIndex: number): string | null {
     const src = this.views[sceneIndex === 0 ? 'a' : 'b']?.canvas;
     if (!src || src.width === 0 || src.height === 0) return null;
     const thumb = document.createElement('canvas');
     thumb.width = 160;
     thumb.height = Math.max(1, Math.round((160 * src.height) / src.width));
-    thumb.getContext('2d').drawImage(src, 0, 0, thumb.width, thumb.height);
+    thumb.getContext('2d')!.drawImage(src, 0, 0, thumb.width, thumb.height);
     return thumb.toDataURL('image/jpeg', 0.75);
   }
 
-  syncPreviewCanvases() {
+  syncPreviewCanvases(): void {
     this.previewSlots.forEach((slot) => {
       if (!slot.canvas) return;
       slot.canvas.width = this.previewWidth;
@@ -494,7 +521,7 @@ export class RenderEngine {
 
   // Deck targets track the scene views' aspect ratio, so shaders render at
   // the shape they're shown at; applied only once the aspect settles.
-  maybeResizeDecks(aspect) {
+  maybeResizeDecks(aspect: number): void {
     if (Math.abs(aspect - this.appliedAspect) < 0.01) {
       this.pendingAspect = null;
       this.aspectStableFrames = 0;
@@ -531,8 +558,8 @@ export class RenderEngine {
 
   // Render a composite pass on the hidden GL canvas, then copy it onto an
   // on-screen 2D view canvas (GPU-side drawImage).
-  renderToView(compositeScene, view) {
-    if (!view?.ctx) return;
+  renderToView(compositeScene: THREE.Scene, view: BlitView | undefined): void {
+    if (!view?.ctx || !view.canvas) return;
     const { canvas, ctx } = view;
     // the master canvas lives in another window — use ITS pixel ratio
     const dpr = (canvas.ownerDocument.defaultView || window).devicePixelRatio || 1;
@@ -560,7 +587,7 @@ export class RenderEngine {
     ctx.drawImage(src, Math.round((pw - dw) / 2), Math.round((ph - dh) / 2), dw, dh);
   }
 
-  loop() {
+  loop(): void {
     if (!this.running) return;
     this.frame += 1;
 
@@ -606,57 +633,13 @@ export class RenderEngine {
     this.decks.forEach((deck, i) => {
       this.renderer.setRenderTarget(deck.target);
       if (deck.mode === 'model' && deck.model) {
-        const model = deck.model;
-        const aut = this.automation[i];
         const level = this.deckAudioUniforms[i].u_audio_level.value;
-
-        // ROT adds spin on top of a gentle always-on base rotation
-        model.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
-        const pulse =
-          1 + aut.scl.amt * 0.5 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
-        // DST = jelly squash-and-stretch (material-agnostic "distortion")
-        const wobble =
-          aut.dst.amt * 0.35 * (aut.dst.audio ? level : 0.6 + 0.4 * Math.sin(t * 1.3));
-
-        model.group.rotation.y = t * 0.3 + model.spin;
-        model.group.rotation.x = Math.sin(t * 0.3) * 0.2;
-        // SKW = side lean (true shear isn't expressible in TRS transforms)
-        model.group.rotation.z =
-          aut.skw.amt * 0.5 * (aut.skw.audio ? level : Math.sin(t * 0.9));
-        model.group.scale.set(
-          model.baseScale * pulse * (1 + wobble * Math.sin(t * 7.0)),
-          model.baseScale * pulse * (1 - wobble * Math.sin(t * 7.0 + 1.0)),
-          model.baseScale * pulse * (1 + wobble * Math.cos(t * 6.0)),
-        );
-        // FLK = whole-frame blink (works regardless of imported materials)
-        model.group.visible = !(
-          aut.flk.amt > 0 &&
-          Math.random() <
-            aut.flk.amt * (aut.flk.audio ? Math.min(1, level * 1.5) : 1) * 0.5
-        );
-
-        this.renderer.render(model.scene, this.modelCamera);
+        animateModelDeck(deck.model, this.automation[i], level, t, dt);
+        this.renderer.render(deck.model.scene, this.modelCamera);
       } else if (deck.mode === 'sprite' && deck.sprite) {
-        const sprite = deck.sprite;
-        const aut = this.automation[i];
         const level = this.deckAudioUniforms[i].u_audio_level.value;
-
-        const pulse =
-          1 + aut.scl.amt * 0.6 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
-        sprite.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
-
-        sprite.mesh.scale.set(sprite.baseW * pulse, sprite.baseH * pulse, 1);
-        sprite.mesh.position.y = Math.sin(t * 0.8) * 0.04;
-        sprite.mesh.rotation.z = sprite.spin;
-
-        const u = sprite.mesh.material.uniforms;
-        u.u_time.value = t;
-        u.u_opacity.value =
-          1 - aut.flk.amt * (aut.flk.audio ? Math.min(1, level * 1.5) : 1) * Math.random();
-        u.u_distort.value = aut.dst.amt * (aut.dst.audio ? level : 0.6 + 0.4 * Math.sin(t * 1.3));
-        u.u_skew.value = aut.skw.amt * 0.7 * (aut.skw.audio ? level : Math.sin(t * 0.9));
-
-        this.renderer.render(sprite.scene, this.camera);
+        animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt);
+        this.renderer.render(deck.sprite.scene, this.camera);
       } else {
         this.renderer.render(deck.scene, this.camera);
       }
@@ -673,7 +656,7 @@ export class RenderEngine {
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  updatePreview(channelIndex) {
+  updatePreview(channelIndex: number): void {
     const slot = this.previewSlots[channelIndex];
     if (!slot?.ctx) return;
     // previews always show the cued scene's channels, sampled from the deck's
@@ -698,27 +681,11 @@ export class RenderEngine {
       this.previewBuffer,
     );
 
-    // GL framebuffers are bottom-up; ImageData is top-down — flip rows.
-    // Premultiply alpha into RGB (alpha = brightness, matching the composite
-    // shader) so the preview shows exactly what the master mix will show.
-    const rowBytes = this.previewWidth * 4;
-    const buf = this.previewBuffer;
-    const out = this.previewImage.data;
-    for (let y = 0; y < this.previewHeight; y += 1) {
-      const srcRow = (this.previewHeight - 1 - y) * rowBytes;
-      const dstRow = y * rowBytes;
-      for (let x = 0; x < rowBytes; x += 4) {
-        const a = buf[srcRow + x + 3] / 255;
-        out[dstRow + x] = buf[srcRow + x] * a;
-        out[dstRow + x + 1] = buf[srcRow + x + 1] * a;
-        out[dstRow + x + 2] = buf[srcRow + x + 2] * a;
-        out[dstRow + x + 3] = 255;
-      }
-    }
+    flipAndPremultiply(this.previewBuffer, this.previewImage, this.previewWidth, this.previewHeight);
     slot.ctx.putImageData(this.previewImage, 0, 0);
   }
 
-  dispose() {
+  dispose(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
     this.decks.forEach((deck) => {
@@ -729,9 +696,11 @@ export class RenderEngine {
     });
     this.spriteGeometry.dispose();
     this.previewTarget.dispose();
-    this.sceneComposites.forEach((scene) => scene.children[0]?.material.dispose());
-    this.masterComposite.children[0]?.material.dispose();
-    this.previewScene.children[0]?.material.dispose();
+    const disposeComposite = (scene: THREE.Scene) =>
+      (scene.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> | undefined)?.material.dispose();
+    this.sceneComposites.forEach(disposeComposite);
+    disposeComposite(this.masterComposite);
+    disposeComposite(this.previewScene);
     this.quadGeometry.dispose();
     this.renderer.dispose();
   }

@@ -19,12 +19,12 @@ uniform float u_audio_high;
 uniform float u_audio_level;
 `;
 
-export function buildFragmentShader(body) {
+export function buildFragmentShader(body: string): string {
   return `${FRAGMENT_HEADER}\n${body}\n`;
 }
 
 // Baseline shader so decks aren't black on startup; phase varies hue per deck.
-function makeDefaultBody(phase) {
+function makeDefaultBody(phase: number): string {
   return /* glsl */ `
 void main() {
   vec2 uv = vUv;

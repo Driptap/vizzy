@@ -1,7 +1,16 @@
 // Curated open-weight models that can write GLSL, smallest first.
 // Sizes are the Ollama download; RAM is a rough "runs comfortably" figure
 // (unified memory on Apple Silicon, system RAM + VRAM elsewhere).
-export const MODEL_CATALOG = [
+export interface CatalogModel {
+  tag: string;
+  name: string;
+  download: string;
+  ram: string;
+  blurb: string;
+  default?: boolean;
+}
+
+export const MODEL_CATALOG: CatalogModel[] = [
   {
     tag: 'qwen2.5-coder:1.5b',
     name: 'Qwen2.5 Coder 1.5B',
@@ -47,6 +56,6 @@ export const MODEL_CATALOG = [
   },
 ];
 
-export function catalogEntry(tag) {
+export function catalogEntry(tag: string): CatalogModel | null {
   return MODEL_CATALOG.find((m) => m.tag === tag) || null;
 }

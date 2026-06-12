@@ -2,6 +2,8 @@
 // procedurally generated STL torus, tied together in an "Example Deck"
 // preset. Everything is synthesized at runtime — no binary assets shipped.
 import { saveShader, saveDeck, saveAssetFromBuffer, deleteEntry } from './shaderLibrary';
+import { defaultChannelConfig, makeDefaultAut } from './channels';
+import type { DeckChannelConfig, DeckEntry, LibraryEntry } from '../types';
 
 export const EXAMPLE_DECK_NAME = 'Example Deck';
 const EXAMPLE_NAMES = new Set([
@@ -18,11 +20,11 @@ const EXAMPLE_NAMES = new Set([
  * arrive newest-first, so the kept set is one self-consistent seed batch —
  * and deletes the rest (including their asset files).
  */
-export async function dedupeExampleEntries(entries) {
-  const seen = new Set();
-  const dupes = [];
+export async function dedupeExampleEntries(entries: LibraryEntry[]): Promise<LibraryEntry[]> {
+  const seen = new Set<string>();
+  const dupes: LibraryEntry[] = [];
   entries.forEach((entry) => {
-    if (!EXAMPLE_NAMES.has(entry.name)) return;
+    if (!entry.name || !EXAMPLE_NAMES.has(entry.name)) return;
     if (seen.has(entry.name)) dupes.push(entry);
     else seen.add(entry.name);
   });
@@ -57,7 +59,7 @@ const RINGS_BODY = `void main() {
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-function dataURLToBytes(dataURL) {
+function dataURLToBytes(dataURL: string): Uint8Array {
   const bin = atob(dataURL.split(',')[1]);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
@@ -65,11 +67,11 @@ function dataURLToBytes(dataURL) {
 }
 
 // simple gradient thumbnail with a label, for entries with no natural preview
-function gradientThumb(label, colorA, colorB) {
+function gradientThumb(label: string, colorA: string, colorB: string): string {
   const canvas = document.createElement('canvas');
   canvas.width = 160;
   canvas.height = 90;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d')!;
   const grad = ctx.createLinearGradient(0, 0, 160, 90);
   grad.addColorStop(0, colorA);
   grad.addColorStop(1, colorB);
@@ -83,12 +85,12 @@ function gradientThumb(label, colorA, colorB) {
 }
 
 // neon ring + star on transparent ground, drawn at 512^2
-function makeStarSprite() {
+function makeStarSprite(): { bytes: Uint8Array; thumbnail: string } {
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d')!;
   const c = size / 2;
 
   ctx.strokeStyle = '#22d3ee';
@@ -121,7 +123,7 @@ function makeStarSprite() {
   const thumbCanvas = document.createElement('canvas');
   thumbCanvas.width = 160;
   thumbCanvas.height = 90;
-  const tctx = thumbCanvas.getContext('2d');
+  const tctx = thumbCanvas.getContext('2d')!;
   tctx.fillStyle = '#000';
   tctx.fillRect(0, 0, 160, 90);
   tctx.drawImage(canvas, 35, 0, 90, 90);
@@ -133,8 +135,8 @@ function makeStarSprite() {
 }
 
 // binary STL torus — STLLoader recomputes vertex normals on load
-function makeTorusSTL(R = 1.0, r = 0.45, segU = 48, segV = 24) {
-  const point = (i, j) => {
+function makeTorusSTL(R = 1.0, r = 0.45, segU = 48, segV = 24): Uint8Array {
+  const point = (i: number, j: number): [number, number, number] => {
     const u = (i / segU) * Math.PI * 2;
     const v = (j / segV) * Math.PI * 2;
     return [
@@ -143,7 +145,7 @@ function makeTorusSTL(R = 1.0, r = 0.45, segU = 48, segV = 24) {
       r * Math.sin(v),
     ];
   };
-  const tris = [];
+  const tris: [number, number, number][][] = [];
   for (let i = 0; i < segU; i += 1) {
     for (let j = 0; j < segV; j += 1) {
       const a = point(i, j);
@@ -168,21 +170,8 @@ function makeTorusSTL(R = 1.0, r = 0.45, segU = 48, segV = 24) {
   return new Uint8Array(buf);
 }
 
-const defaultAut = () =>
-  Object.fromEntries(['scl', 'rot', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]));
-
-const baseChannel = () => ({
-  prompt: '',
-  opacity: 0,
-  muted: false,
-  scale: 1,
-  size: { x: 1, y: 1 },
-  fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
-  aut: defaultAut(),
-});
-
 /** Creates the example entries + deck preset; returns them newest-first. */
-export async function seedExampleLibrary() {
+export async function seedExampleLibrary(): Promise<{ deck: DeckEntry; entries: LibraryEntry[] }> {
   const plasma = await saveShader({
     name: 'Example · Plasma Flow',
     code: PLASMA_BODY,
@@ -209,28 +198,28 @@ export async function seedExampleLibrary() {
     screenshot: gradientThumb('TORUS', '#0f172a', '#10b981'),
   });
 
-  const channels = [
+  const channels: DeckChannelConfig[] = [
     {
-      ...baseChannel(),
+      ...defaultChannelConfig(),
       shaderId: plasma.id,
       opacity: 1,
       prompt: 'flowing plasma waves reacting to the bass',
     },
     {
-      ...baseChannel(),
+      ...defaultChannelConfig(),
       spriteId: sprite.id,
       opacity: 0.85,
       size: { x: 0.7, y: 0.7 },
-      aut: { ...defaultAut(), scl: { amt: 0.55, audio: true }, rot: { amt: 0.12, audio: false } },
+      aut: { ...makeDefaultAut(), scl: { amt: 0.55, audio: true }, rot: { amt: 0.12, audio: false } },
     },
     {
-      ...baseChannel(),
+      ...defaultChannelConfig(),
       modelId: torus.id,
       opacity: 0.9,
-      aut: { ...defaultAut(), rot: { amt: 0.35, audio: false }, dst: { amt: 0.3, audio: true } },
+      aut: { ...makeDefaultAut(), rot: { amt: 0.35, audio: false }, dst: { amt: 0.3, audio: true } },
     },
     {
-      ...baseChannel(),
+      ...defaultChannelConfig(),
       shaderId: rings.id,
       prompt: 'pulsing concentric neon rings',
     },

@@ -1,9 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
+import type {
+  DeckEntry,
+  LibraryEntry,
+  ModelEntry,
+  ShaderEntry,
+  SpriteEntry,
+} from '../types';
+
+type TabId = 'shaders' | 'decks' | 'models' | 'sprites';
+
+interface ContextMenu {
+  x: number;
+  y: number;
+  entry: LibraryEntry;
+  kind: TabId;
+}
 
 const MENU_WIDTH = 168;
 const MENU_HEIGHT = 200;
 
-const TABS = [
+const TABS: { id: TabId; label: string }[] = [
   { id: 'shaders', label: 'SHDR' },
   { id: 'decks', label: 'DECKS' },
   { id: 'models', label: '3D' },
@@ -14,10 +30,28 @@ const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
 const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
 // tabs whose content comes from files on disk (open button + drag-drop)
-const FILE_TABS = {
+const FILE_TABS: Partial<Record<TabId, { extensions: string[]; buttonLabel: string }>> = {
   models: { extensions: MODEL_EXTENSIONS, buttonLabel: '+ OPEN MODEL…' },
   sprites: { extensions: SPRITE_EXTENSIONS, buttonLabel: '+ OPEN IMAGE…' },
 };
+
+interface LibraryPanelProps {
+  open: boolean;
+  shaders: ShaderEntry[];
+  decks: DeckEntry[];
+  models: ModelEntry[];
+  sprites: SpriteEntry[];
+  sceneLetter: string;
+  onSaveDeck: () => void | Promise<void>;
+  onAssignDeck: (entry: DeckEntry, scene: number) => void;
+  onAddModels: (files: File[]) => void;
+  onAssignModel: (entry: ModelEntry, channel: number) => void;
+  onAddSprites: (files: File[]) => void;
+  onAssignSprite: (entry: SpriteEntry, channel: number) => void;
+  onDelete: (entry: LibraryEntry) => void;
+  onRename: (entry: LibraryEntry, name: string) => void;
+  onAddToChannel: (entry: ShaderEntry, channel: number) => void;
+}
 
 export function LibraryPanel({
   open,
@@ -35,19 +69,19 @@ export function LibraryPanel({
   onDelete,
   onRename,
   onAddToChannel,
-}) {
-  const [tab, setTab] = useState('shaders');
-  const [menu, setMenu] = useState(null); // { x, y, entry, kind }
-  const [renamingId, setRenamingId] = useState(null);
+}: LibraryPanelProps) {
+  const [tab, setTab] = useState<TabId>('shaders');
+  const [menu, setMenu] = useState<ContextMenu | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [justSaved, setJustSaved] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const menuRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleDroppedFiles = (fileList) => {
+  const handleDroppedFiles = (fileList: FileList | null) => {
     const fileTab = FILE_TABS[tab];
-    if (!fileTab) return;
+    if (!fileTab || !fileList) return;
     const files = Array.from(fileList).filter((file) =>
       fileTab.extensions.some((ext) => file.name.toLowerCase().endsWith(ext)),
     );
@@ -58,8 +92,8 @@ export function LibraryPanel({
 
   useEffect(() => {
     if (!menu) return undefined;
-    const close = (e) => {
-      if (!menuRef.current?.contains(e.target)) setMenu(null);
+    const close = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
     };
     const closeAlways = () => setMenu(null);
     window.addEventListener('pointerdown', close);
@@ -72,13 +106,13 @@ export function LibraryPanel({
     };
   }, [menu]);
 
-  const startRename = (entry) => {
+  const startRename = (entry: LibraryEntry) => {
     setRenamingId(entry.id);
     setDraft(entry.name || '');
     setMenu(null);
   };
 
-  const commitRename = (entry) => {
+  const commitRename = (entry: LibraryEntry) => {
     if (renamingId !== entry.id) return;
     setRenamingId(null);
     const name = draft.trim();
@@ -91,8 +125,9 @@ export function LibraryPanel({
     setTimeout(() => setJustSaved(false), 1200);
   };
 
-  const items =
+  const items: LibraryEntry[] =
     tab === 'shaders' ? shaders : tab === 'decks' ? decks : tab === 'models' ? models : sprites;
+  const fileTab = FILE_TABS[tab];
 
   return (
     <div
@@ -118,21 +153,21 @@ export function LibraryPanel({
           ))}
         </div>
 
-        {FILE_TABS[tab] && (
+        {fileTab && (
           <>
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              title={`Add files (${FILE_TABS[tab].extensions.join(', ')}) — or drag them into the list below`}
+              title={`Add files (${fileTab.extensions.join(', ')}) — or drag them into the list below`}
               className="mx-2 mt-2 rounded border border-neutral-700 py-1.5 text-[10px] font-bold tracking-wider text-neutral-300 transition-colors hover:border-cyan-500 hover:text-cyan-300"
             >
-              {FILE_TABS[tab].buttonLabel}
+              {fileTab.buttonLabel}
             </button>
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept={FILE_TABS[tab].extensions.join(',')}
+              accept={fileTab.extensions.join(',')}
               className="hidden"
               onChange={(e) => {
                 handleDroppedFiles(e.target.files);
@@ -162,13 +197,13 @@ export function LibraryPanel({
             dragOver ? 'rounded ring-2 ring-inset ring-cyan-500/70' : ''
           }`}
           onDragOver={(e) => {
-            if (!FILE_TABS[tab]) return;
+            if (!fileTab) return;
             e.preventDefault();
             setDragOver(true);
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
-            if (!FILE_TABS[tab]) return;
+            if (!fileTab) return;
             e.preventDefault();
             setDragOver(false);
             handleDroppedFiles(e.dataTransfer.files);
@@ -273,9 +308,9 @@ export function LibraryPanel({
                 key={channel}
                 type="button"
                 onClick={() => {
-                  if (menu.kind === 'shaders') onAddToChannel(menu.entry, channel);
-                  else if (menu.kind === 'models') onAssignModel(menu.entry, channel);
-                  else onAssignSprite(menu.entry, channel);
+                  if (menu.kind === 'shaders') onAddToChannel(menu.entry as ShaderEntry, channel);
+                  else if (menu.kind === 'models') onAssignModel(menu.entry as ModelEntry, channel);
+                  else onAssignSprite(menu.entry as SpriteEntry, channel);
                   setMenu(null);
                 }}
                 className="block w-full px-3 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800 hover:text-cyan-300"
@@ -291,7 +326,7 @@ export function LibraryPanel({
                 key={scene}
                 type="button"
                 onClick={() => {
-                  onAssignDeck(menu.entry, scene);
+                  onAssignDeck(menu.entry as DeckEntry, scene);
                   setMenu(null);
                 }}
                 className={`block w-full px-3 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800 ${

@@ -1,4 +1,5 @@
 import { selectRecipe } from './recipes';
+import type { DeckStatus } from '../types';
 
 export const DEFAULT_MODEL = 'qwen2.5-coder';
 
@@ -8,14 +9,14 @@ export const DEFAULT_BASE = 'http://127.0.0.1:11434';
 export const MANAGED_BASE = 'http://127.0.0.1:11435';
 
 let baseUrl = DEFAULT_BASE;
-export const getBaseUrl = () => baseUrl;
-export const setBaseUrl = (url) => {
+export const getBaseUrl = (): string => baseUrl;
+export const setBaseUrl = (url: string): void => {
   baseUrl = url;
 };
 export const DEFAULT_ENDPOINT = `${DEFAULT_BASE}/api/generate`;
 
 /** @returns the server's version string, or null if unreachable */
-export async function checkServer(base, timeoutMs = 1500) {
+export async function checkServer(base: string, timeoutMs = 1500): Promise<string | null> {
   try {
     const res = await fetch(`${base}/api/version`, {
       signal: AbortSignal.timeout(timeoutMs),
@@ -28,7 +29,7 @@ export async function checkServer(base, timeoutMs = 1500) {
 }
 
 /** Probe user-run then managed server; sets the module base URL on a hit. */
-export async function resolveServer() {
+export async function resolveServer(): Promise<string | null> {
   for (const base of [DEFAULT_BASE, MANAGED_BASE]) {
     if (await checkServer(base)) {
       setBaseUrl(base);
@@ -39,22 +40,36 @@ export async function resolveServer() {
 }
 
 /** @returns array of installed model tags (":latest" stripped) */
-export async function listInstalledModels(base = baseUrl) {
+export async function listInstalledModels(base: string = baseUrl): Promise<string[]> {
   try {
     const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.models || []).map((m) => m.name.replace(/:latest$/, ''));
+    return ((data.models || []) as { name: string }[]).map((m) =>
+      m.name.replace(/:latest$/, ''),
+    );
   } catch {
     return [];
   }
+}
+
+/** One NDJSON progress event from Ollama's pull endpoint. */
+export interface PullProgress {
+  status?: string;
+  total?: number;
+  completed?: number;
+  error?: string;
 }
 
 /**
  * Pull a model with streaming progress. Ollama emits NDJSON lines like
  * {status, total, completed}; onProgress receives the latest of each.
  */
-export async function pullModel(tag, onProgress, base = baseUrl) {
+export async function pullModel(
+  tag: string,
+  onProgress?: ((evt: PullProgress) => void) | null,
+  base: string = baseUrl,
+): Promise<void> {
   const res = await fetch(`${base}/api/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -71,10 +86,10 @@ export async function pullModel(tag, onProgress, base = baseUrl) {
     if (done) break;
     buffered += decoder.decode(value, { stream: true });
     const lines = buffered.split('\n');
-    buffered = lines.pop();
+    buffered = lines.pop() ?? '';
     for (const line of lines) {
       if (!line.trim()) continue;
-      const evt = JSON.parse(line);
+      const evt = JSON.parse(line) as PullProgress;
       if (evt.error) throw new Error(evt.error);
       onProgress?.(evt);
     }
@@ -109,18 +124,43 @@ Additional hard rules:
 
 const REQUEST_TIMEOUT_MS = 120000;
 
+/** The failed attempt resent to the model for a repair pass. */
+export interface RepairContext {
+  code: string;
+  error: string;
+}
+
+export type DeckStatusCallback = (
+  deckIndex: number,
+  status: DeckStatus,
+  error?: string | null,
+) => void;
+
+interface GenerationJob {
+  deckIndex: number;
+  prompt: string;
+  onResponse: (raw: string) => void;
+  repair: RepairContext | null;
+}
+
+interface GenerationQueueOptions {
+  getModel: () => string;
+  getEndpoint?: () => string;
+  onStatus: DeckStatusCallback;
+}
+
 /**
  * Sequential generation queue: jobs run one at a time so concurrent deck
  * generations don't lock the GPU Ollama is running on.
  */
 export class GenerationQueue {
-  /**
-   * @param {object} opts
-   * @param {() => string} opts.getModel
-   * @param {() => string} opts.getEndpoint
-   * @param {(deckIndex: number, status: string, error?: string|null) => void} opts.onStatus
-   */
-  constructor({ getModel, getEndpoint, onStatus }) {
+  getModel: () => string;
+  getEndpoint: () => string;
+  onStatus: DeckStatusCallback;
+  queue: GenerationJob[];
+  busy: boolean;
+
+  constructor({ getModel, getEndpoint, onStatus }: GenerationQueueOptions) {
     this.getModel = getModel;
     this.getEndpoint = getEndpoint || (() => `${getBaseUrl()}/api/generate`);
     this.onStatus = onStatus;
@@ -129,12 +169,15 @@ export class GenerationQueue {
   }
 
   /**
-   * @param {number} deckIndex
-   * @param {string} prompt
-   * @param {(rawResponse: string) => void} onResponse called with the raw LLM
-   *   text; the caller owns parsing/compiling and subsequent status updates.
+   * @param onResponse called with the raw LLM text; the caller owns
+   *   parsing/compiling and subsequent status updates.
    */
-  enqueue(deckIndex, prompt, onResponse, repair = null) {
+  enqueue(
+    deckIndex: number,
+    prompt: string,
+    onResponse: (raw: string) => void,
+    repair: RepairContext | null = null,
+  ): void {
     // a re-click replaces that deck's pending job rather than stacking
     this.queue = this.queue.filter((job) => job.deckIndex !== deckIndex);
     this.queue.push({ deckIndex, prompt, onResponse, repair });
@@ -142,7 +185,7 @@ export class GenerationQueue {
     this.pump();
   }
 
-  async pump() {
+  async pump(): Promise<void> {
     if (this.busy) return;
     const job = this.queue.shift();
     if (!job) return;
@@ -154,14 +197,14 @@ export class GenerationQueue {
       job.onResponse(raw);
     } catch (err) {
       console.error('[Vizzy] Generation failed:', err);
-      this.onStatus(job.deckIndex, 'error', err.message || 'Generation failed');
+      this.onStatus(job.deckIndex, 'error', (err as Error).message || 'Generation failed');
     } finally {
       this.busy = false;
       this.pump();
     }
   }
 
-  async request(userPrompt, repair = null) {
+  async request(userPrompt: string, repair: RepairContext | null = null): Promise<string> {
     // Append at most ONE style recipe, and only when the prompt matches —
     // keeps the local model's context small while raising genre quality.
     const recipe = selectRecipe(userPrompt);
@@ -198,7 +241,7 @@ export class GenerationQueue {
       const data = await res.json();
       return data.response || '';
     } catch (err) {
-      if (err.name === 'AbortError') throw new Error('Ollama request timed out');
+      if ((err as Error).name === 'AbortError') throw new Error('Ollama request timed out');
       if (err instanceof TypeError) throw new Error('Ollama unreachable — is `ollama serve` running?');
       throw err;
     } finally {

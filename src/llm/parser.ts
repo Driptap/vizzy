@@ -27,7 +27,7 @@ const OUT_VAR =
  * custom `out vec4 X` outputs are remapped to gl_FragColor, and texture()
  * calls become texture2D(). Returns null if no entry point is found.
  */
-export function extractShaderCode(raw) {
+export function extractShaderCode(raw: unknown): string | null {
   if (!raw) return null;
   let text = String(raw);
 
@@ -42,11 +42,12 @@ export function extractShaderCode(raw) {
   }
   if (!entry) return null;
 
+  const entryIndex = entry.index ?? 0;
   const startMatch = text.match(CODE_START);
   const start =
-    startMatch && startMatch.index <= entry.index ? startMatch.index : entry.index;
+    startMatch && (startMatch.index ?? 0) <= entryIndex ? (startMatch.index ?? 0) : entryIndex;
 
-  const braceStart = text.indexOf('{', entry.index);
+  const braceStart = text.indexOf('{', entryIndex);
   if (braceStart === -1) return null;
   let depth = 0;
   let end = -1;

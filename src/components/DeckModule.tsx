@@ -1,7 +1,16 @@
 import { useState } from 'react';
 import { Knob } from './Knob';
+import type {
+  AudioBand,
+  AutEffectKey,
+  AutomationMap,
+  ChannelFx,
+  ChannelSize,
+  DeckStatus,
+  SourceType,
+} from '../types';
 
-const STATUS_STYLES = {
+const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = {
   idle: { label: 'Idle', className: 'bg-neutral-700 text-neutral-300' },
   queued: { label: 'Queued', className: 'bg-amber-500/20 text-amber-300' },
   generating: { label: 'Generating', className: 'bg-blue-500/20 text-blue-300 animate-pulse' },
@@ -11,11 +20,11 @@ const STATUS_STYLES = {
   error: { label: 'Error', className: 'bg-red-500/20 text-red-300' },
 };
 
-const BUSY_STATUSES = ['queued', 'generating', 'compiling'];
+const BUSY_STATUSES: DeckStatus[] = ['queued', 'generating', 'compiling'];
 
 const TABS = ['XFRM', 'AUDIO', 'COLOR'];
 
-const AUT_EFFECTS = [
+const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'scl', label: 'SCL', title: 'Scaling' },
   { key: 'rot', label: 'ROT', title: 'Rotation' },
   { key: 'flk', label: 'FLK', title: 'Flicker' },
@@ -23,12 +32,39 @@ const AUT_EFFECTS = [
   { key: 'skw', label: 'SKW', title: 'Skew' },
 ];
 
-const BANDS = [
+const BANDS: { id: AudioBand; label: string }[] = [
   { id: 'low', label: 'LO' },
   { id: 'mid', label: 'MID' },
   { id: 'high', label: 'HI' },
   { id: 'level', label: 'LVL' },
 ];
+
+interface DeckModuleProps {
+  index: number;
+  sceneLetter: string;
+  status: DeckStatus;
+  error: string | null;
+  prompt: string;
+  onPromptChange: (channel: number, text: string) => void;
+  scale: number;
+  onScaleChange: (channel: number, value: number) => void;
+  size: ChannelSize;
+  onSizeChange: (channel: number, axis: 'x' | 'y', value: number) => void;
+  fx: ChannelFx;
+  onFxChange: <K extends keyof ChannelFx>(channel: number, key: K, value: ChannelFx[K]) => void;
+  sourceType: SourceType;
+  aut: AutomationMap;
+  onAutChange: (
+    channel: number,
+    effect: AutEffectKey,
+    field: 'amt' | 'audio',
+    value: number | boolean,
+  ) => void;
+  onGenerate: (channel: number, prompt: string) => void;
+  onRegenerate: (channel: number, prompt: string) => void;
+  onSave: (channel: number) => void | Promise<void>;
+  previewRef: (el: HTMLCanvasElement | null) => void;
+}
 
 export function DeckModule({
   index,
@@ -50,14 +86,14 @@ export function DeckModule({
   onRegenerate,
   onSave,
   previewRef,
-}) {
+}: DeckModuleProps) {
   const [saved, setSaved] = useState(false);
   const [tab, setTab] = useState('XFRM');
   const [aspectLocked, setAspectLocked] = useState(false);
 
-  const clampSize = (v) => Math.min(1, Math.max(0.05, v));
+  const clampSize = (v: number) => Math.min(1, Math.max(0.05, v));
   // when locked, moving one axis scales the other by the same factor
-  const handleSize = (axis, value) => {
+  const handleSize = (axis: 'x' | 'y', value: number) => {
     onSizeChange(index, axis, value);
     if (aspectLocked) {
       const other = axis === 'x' ? 'y' : 'x';
@@ -65,7 +101,7 @@ export function DeckModule({
       onSizeChange(index, other, clampSize(size[other] * factor));
     }
   };
-  const resetSize = (axis) => {
+  const resetSize = (axis: 'x' | 'y') => {
     onSizeChange(index, axis, 1);
     if (aspectLocked) onSizeChange(index, axis === 'x' ? 'y' : 'x', 1);
   };

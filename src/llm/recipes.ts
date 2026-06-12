@@ -3,7 +3,14 @@
 // context small (one recipe max) while sharply raising output quality for
 // known visual genres. No backticks/${ in guidance bodies (template literals).
 
-export const STYLE_RECIPES = [
+export interface StyleRecipe {
+  id: string;
+  title: string;
+  keywords: string[];
+  guidance: string;
+}
+
+export const STYLE_RECIPES: StyleRecipe[] = [
   {
     id: 'fractal',
     title: 'Escape-time fractals (Mandelbrot / Julia)',
@@ -107,9 +114,9 @@ Then swirl the whole field: rotate p before the loop by an angle proportional to
 ];
 
 // Best single match wins; ties broken by keyword specificity (longer match).
-export function selectRecipe(userPrompt) {
+export function selectRecipe(userPrompt: string | null | undefined): StyleRecipe | null {
   const text = (userPrompt || '').toLowerCase();
-  let best = null;
+  let best: StyleRecipe | null = null;
   let bestScore = 0;
   STYLE_RECIPES.forEach((recipe) => {
     let score = 0;
