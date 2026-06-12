@@ -6,6 +6,7 @@ import type {
   DeckEntry,
   LibraryEntry,
   ModelEntry,
+  PatchSpec,
   SceneEntry,
   SceneSpec,
   ShaderEntry,
@@ -54,22 +55,24 @@ export async function listShaders(): Promise<LibraryEntry[]> {
   );
   return entries
     .filter((entry): entry is LibraryEntry => entry !== null)
+    // pre-patch GLSL shader entries (code, no patch) are dead weight now
+    .filter((entry) => entry.kind || 'patch' in entry)
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function saveShader({
   name = '',
-  code,
+  patch,
   screenshot = null,
 }: {
   name?: string;
-  code: string;
+  patch: PatchSpec;
   screenshot?: string | null;
 }): Promise<ShaderEntry> {
   const entry: ShaderEntry = {
     id: makeId('shader'),
     name,
-    code,
+    patch,
     screenshot,
     createdAt: Date.now(),
   };

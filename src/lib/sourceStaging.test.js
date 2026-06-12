@@ -17,7 +17,7 @@ const sceneEntry = { id: 'scene-1', kind: 'scene', spec: sceneSpec, createdAt: 4
 
 // the engine is the NativeRenderEngine surface stageSource drives
 const makeEngine = () => ({
-  stageShader: vi.fn(async () => ({ ok: true })),
+  stagePatch: vi.fn(async () => ({ ok: true })),
   stageSpriteFromPath: vi.fn(async () => ({ ok: true })),
   stageModelFromPath: vi.fn(async () => ({ ok: true })),
   stageLandscapeFromPath: vi.fn(async () => ({ ok: true })),
@@ -26,16 +26,17 @@ const makeEngine = () => ({
 
 const modelEntry = { id: 'model-1', kind: 'model', file: 'm.stl', createdAt: 1 };
 const spriteEntry = { id: 'sprite-1', kind: 'sprite', file: 's.png', createdAt: 2 };
-const shaderEntry = { id: 'shader-1', code: 'void main() {}', createdAt: 3 };
+const patch = { generator: 'plasma', palette: { preset: 'rainbow' } };
+const shaderEntry = { id: 'shader-1', patch, createdAt: 3 };
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('stageSource', () => {
-  it('stages shaders through the engine', async () => {
+  it('stages patches through the engine', async () => {
     const engine = makeEngine();
-    const result = await stageSource(engine, 2, { type: 'shader', code: 'void main() {}' });
+    const result = await stageSource(engine, 2, { type: 'shader', patch });
     expect(result).toEqual({ ok: true });
-    expect(engine.stageShader).toHaveBeenCalledWith(2, 'void main() {}');
+    expect(engine.stagePatch).toHaveBeenCalledWith(2, patch);
   });
 
   it('stages models by library file path', async () => {
@@ -79,11 +80,11 @@ describe('stageSource', () => {
     expect(result).toEqual({ ok: false, error: 'corrupt file' });
   });
 
-  it('maps a failed shader compile to an error result', async () => {
+  it('maps a failed patch stage to an error result', async () => {
     const engine = makeEngine();
-    engine.stageShader.mockResolvedValueOnce({ ok: false, error: 'bad GLSL' });
-    const result = await stageSource(engine, 0, { type: 'shader', code: 'nope' });
-    expect(result).toEqual({ ok: false, error: 'bad GLSL' });
+    engine.stagePatch.mockResolvedValueOnce({ ok: false, error: 'render engine not started' });
+    const result = await stageSource(engine, 0, { type: 'shader', patch });
+    expect(result).toEqual({ ok: false, error: 'render engine not started' });
   });
 });
 
@@ -95,7 +96,7 @@ describe('resolveSourceRef', () => {
   it('resolves deck-preset refs by id kind', () => {
     expect(resolveSourceRef({ shaderId: 'shader-1' }, byId).source).toEqual({
       type: 'shader',
-      code: shaderEntry.code,
+      patch,
     });
     expect(resolveSourceRef({ modelId: 'model-1' }, byId).source).toEqual({
       type: 'model',
@@ -136,9 +137,9 @@ describe('resolveSourceRef', () => {
       type: 'model',
       entry: modelEntry,
     });
-    expect(resolveSourceRef({ type: 'shader', code: 'void main() {}' }, byId).source).toEqual({
+    expect(resolveSourceRef({ type: 'shader', patch }, byId).source).toEqual({
       type: 'shader',
-      code: 'void main() {}',
+      patch,
     });
   });
 
@@ -153,12 +154,12 @@ describe('resolveSourceRef', () => {
       'Saved sprite is missing from the library',
     );
     expect(resolveSourceRef({ shaderId: 'gone' }, byId).error).toBe(
-      'Saved shader is missing from the library',
+      'Saved patch is missing from the library',
     );
   });
 
   it('reports an empty ref as nothing to stage', () => {
     expect(resolveSourceRef({}, byId).error).toBe('Nothing to stage');
-    expect(resolveSourceRef({ type: 'shader', code: null }, byId).error).toBe('Nothing to stage');
+    expect(resolveSourceRef({ type: 'shader' }, byId).error).toBe('Nothing to stage');
   });
 });

@@ -73,7 +73,7 @@ export function useSessionPersistence({
       cueScene,
       bpm,
       slots: Array.from({ length: SLOTS }, (_, i) => ({
-        source: engine ? engine.getChannelSource(i) : { type: 'shader', code: null },
+        source: engine ? engine.getChannelSource(i) : undefined,
         prompt: prompts[i],
         opacity: opacities[i],
         muted: muted[i],

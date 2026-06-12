@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
-import { extractShaderCode } from '../llm/parser';
+import { PATCH_FORMAT, PATCH_SYSTEM_PROMPT } from '../llm/patches';
 import { SCENE_SYSTEM_PROMPT, parseSceneSpec } from '../llm/scenes';
+import { parsePatchSpec } from '../lib/patches';
 import { slotIndex } from '../lib/channels';
 
 export type GenMode = 'shader' | 'scene';
@@ -17,29 +18,28 @@ interface GenerationOptions {
   setSourceType: PerformanceState['setSourceType'];
 }
 
-// Prompt-to-shader flow: parse the raw LLM response, stage it on the engine,
+// Prompt-to-patch flow: parse the raw LLM response, stage it on the engine,
 // and keep the last failure per slot so Regenerate can ask for a repair.
 export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, setSourceType }: GenerationOptions) {
   // per-slot {code, error} of the last failed generation, fuels Regenerate
   const lastFailRef = useRef<Record<number, RepairContext>>({});
 
-  const handleShaderResponse = useCallback(
+  const handlePatchResponse = useCallback(
     async (slot: number, raw: string) => {
-      const code = extractShaderCode(raw);
-      if (!code) {
-        const error = 'No GLSL main() block found in the model response';
-        lastFailRef.current[slot] = { code: String(raw).trim().slice(0, 4000), error };
-        setDeckState(slot, 'failed', error);
+      const parsed = parsePatchSpec(raw);
+      if (!parsed.spec) {
+        lastFailRef.current[slot] = { code: String(raw).trim().slice(0, 4000), error: parsed.error };
+        setDeckState(slot, 'failed', parsed.error);
         return;
       }
       setDeckState(slot, 'compiling');
-      const result = await engineRef.current!.stageShader(slot, code);
+      const result = await engineRef.current!.stagePatch(slot, parsed.spec);
       if (result.ok) {
         delete lastFailRef.current[slot];
         setDeckState(slot, 'active');
         setSourceType(slot, 'shader');
       } else {
-        lastFailRef.current[slot] = { code, error: result.error };
+        lastFailRef.current[slot] = { code: JSON.stringify(parsed.spec), error: result.error };
         setDeckState(slot, 'failed', result.error);
       }
     },
@@ -73,9 +73,9 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
   const makeResponseHandler = useCallback(
     (slot: number, mode: GenMode) => (raw: string) => {
       if (mode === 'scene') handleSceneResponse(slot, raw);
-      else handleShaderResponse(slot, raw);
+      else handlePatchResponse(slot, raw);
     },
-    [handleShaderResponse, handleSceneResponse],
+    [handlePatchResponse, handleSceneResponse],
   );
 
   const handleGenerate = useCallback(
@@ -86,13 +86,14 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
         prompt,
         makeResponseHandler(slot, mode),
         null,
-        mode === 'scene' ? SCENE_SYSTEM_PROMPT : null,
+        mode === 'scene' ? SCENE_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
+        mode === 'scene' ? null : PATCH_FORMAT,
       );
     },
     [queueRef, makeResponseHandler, cueScene],
   );
 
-  // resend the prompt along with the failing code + error so the model can fix it
+  // resend the prompt along with the failing response + error so the model can fix it
   const handleRegenerate = useCallback(
     (channel: number, prompt: string, mode: GenMode = 'shader') => {
       const slot = slotIndex(cueScene, channel);
@@ -101,7 +102,8 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
         prompt,
         makeResponseHandler(slot, mode),
         lastFailRef.current[slot] || null,
-        mode === 'scene' ? SCENE_SYSTEM_PROMPT : null,
+        mode === 'scene' ? SCENE_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
+        mode === 'scene' ? null : PATCH_FORMAT,
       );
     },
     [queueRef, makeResponseHandler, cueScene],

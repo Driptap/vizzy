@@ -107,25 +107,24 @@ describe('render_state payload', () => {
 });
 
 describe('staging', () => {
-  it('stageShader maps invoke rejection to a StageResult error', async () => {
+  it('stagePatch maps invoke rejection to a StageResult error', async () => {
     const engine = makeEngine();
     invoke.mockImplementationOnce(async () => {
-      throw 'ERROR: unknown identifier `foo`';
+      throw 'Unknown generator "nope"';
     });
-    const result = await engine.stageShader(0, 'void main() { foo; }');
-    expect(result).toEqual({ ok: false, error: 'ERROR: unknown identifier `foo`' });
+    const result = await engine.stagePatch(0, { generator: 'nope' });
+    expect(result).toEqual({ ok: false, error: 'Unknown generator "nope"' });
     engine.dispose();
   });
 
-  it('stageShader success records the body and source', async () => {
+  it('stagePatch success records the patch and source', async () => {
     const engine = makeEngine();
-    const result = await engine.stageShader(3, 'void main() { gl_FragColor = vec4(1.0); }');
+    const patch = { generator: 'tunnel', palette: { preset: 'synthwave' } };
+    const result = await engine.stagePatch(3, patch);
     expect(result).toEqual({ ok: true });
-    expect(engine.getShaderBody(3)).toContain('vec4(1.0)');
-    expect(engine.getChannelSource(3)).toEqual({
-      type: 'shader',
-      code: 'void main() { gl_FragColor = vec4(1.0); }',
-    });
+    expect(invoke).toHaveBeenCalledWith('render_stage_patch', { slot: 3, spec: patch });
+    expect(engine.getPatch(3)).toEqual(patch);
+    expect(engine.getChannelSource(3)).toEqual({ type: 'shader', patch });
     engine.dispose();
   });
 

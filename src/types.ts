@@ -111,6 +111,57 @@ export interface ChannelConfig {
   loop: DeckLoop;
 }
 
+// ---- LLM-generated deck patches ----
+
+/** A vec3 of cosine-palette coefficients. */
+export type PatchVec3 = [number, number, number];
+
+/** Named preset, or custom IQ cosine coefficients (col = a + b·cos(τ(c·t+d))). */
+export type PatchPalette =
+  | { preset: string }
+  | { a: PatchVec3; b: PatchVec3; c: PatchVec3; d: PatchVec3 };
+
+export interface PatchWarp {
+  type: string;
+  amount?: number;
+  audio?: AudioBand;
+}
+
+export type PatchAudioTarget = 'scale' | 'brightness' | 'speed';
+
+export interface PatchAudioRoute {
+  band: AudioBand;
+  target: PatchAudioTarget;
+  amount: number;
+}
+
+export interface PatchPost {
+  /** feedback decay 0..0.97; > 0 turns the history buffer on */
+  trail?: number;
+  /** MilkDrop-style per-frame feedback zoom (1 = none, 1.02 = classic) */
+  feedZoom?: number;
+  feedRotate?: number;
+  posterize?: number;
+  scanlines?: number;
+  grain?: number;
+  vignette?: number;
+}
+
+/**
+ * A structured deck visual: the LLM fills this in instead of writing shader
+ * code; the Rust composer assembles trusted WGSL blocks from it. A spec that
+ * parses always renders. Mirrors src-tauri/src/render/patch.rs.
+ */
+export interface PatchSpec {
+  generator: string;
+  params?: Record<string, number>;
+  palette?: PatchPalette;
+  warps?: PatchWarp[];
+  motion?: { speed?: number; rotate?: number };
+  audio?: PatchAudioRoute[];
+  post?: PatchPost;
+}
+
 // ---- procedural fly-through scenes ----
 
 /**
@@ -136,10 +187,10 @@ interface EntryBase {
   createdAt: number;
 }
 
-/** Plain shader entries predate `kind` and simply omit it. */
+/** Patch entries (deck visuals) predate `kind` and simply omit it. */
 export interface ShaderEntry extends EntryBase {
   kind?: undefined;
-  code: string;
+  patch: PatchSpec;
 }
 
 export interface DeckEntry extends EntryBase {
@@ -182,7 +233,7 @@ export type DeckChannelConfig = Partial<ChannelConfig> & {
 
 /** What is currently running on an engine slot (also persisted in sessions). */
 export type ChannelSource =
-  | { type: 'shader'; code: string | null }
+  | { type: 'shader'; patch: PatchSpec }
   | { type: 'model'; modelId: string }
   | { type: 'sprite'; spriteId: string }
   | { type: 'landscape'; modelId: string }
@@ -190,7 +241,7 @@ export type ChannelSource =
 
 /** A resolved, ready-to-stage source. */
 export type StageableSource =
-  | { type: 'shader'; code: string }
+  | { type: 'shader'; patch: PatchSpec }
   | { type: 'model'; entry: ModelEntry }
   | { type: 'sprite'; entry: SpriteEntry }
   | { type: 'landscape'; entry: ModelEntry }

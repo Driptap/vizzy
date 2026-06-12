@@ -32,13 +32,13 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.setTextureShare = vi.fn(async (on) => on);
       this.onGlow = vi.fn();
       this.setGlow = vi.fn(async (on) => on);
-      this.stageShader = vi.fn(async () => ({ ok: true }));
+      this.stagePatch = vi.fn(async () => ({ ok: true }));
       this.stageSpriteFromPath = vi.fn(async () => ({ ok: true }));
       this.stageModelFromPath = vi.fn(async () => ({ ok: true }));
       this.stageLandscapeFromPath = vi.fn(async () => ({ ok: true }));
       this.stageSceneSpec = vi.fn(async () => ({ ok: true }));
-      this.getShaderBody = vi.fn(() => 'void main() {}');
-      this.getChannelSource = vi.fn(() => ({ type: 'shader', code: null }));
+      this.getPatch = vi.fn(() => ({ generator: 'plasma' }));
+      this.getChannelSource = vi.fn(() => ({ type: 'shader', patch: { generator: 'plasma' } }));
       this.getPreviewDataURL = vi.fn(() => 'data:image/jpeg;preview');
       this.getSceneDataURL = vi.fn(() => 'data:image/jpeg;scene');
       this.dispose = vi.fn();
@@ -238,20 +238,28 @@ describe('first-run seeding', () => {
 });
 
 describe('shader generation', () => {
-  it('enqueues the prompt for the cued slot and stages the parsed response', async () => {
+  it('enqueues the prompt for the cued slot and stages the parsed patch', async () => {
     await renderApp();
     fireEvent.change(deckPrompt(1), { target: { value: 'liquid chrome' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[1]);
 
-    expect(queue().enqueue).toHaveBeenCalledWith(1, 'liquid chrome', expect.any(Function), null, null);
+    // patch mode sends the patch system prompt and the structured-output schema
+    expect(queue().enqueue).toHaveBeenCalledWith(
+      1,
+      'liquid chrome',
+      expect.any(Function),
+      null,
+      expect.stringContaining('"generator"'),
+      expect.objectContaining({ required: ['generator'] }),
+    );
 
     const onResponse = queue().enqueue.mock.calls[0][2];
-    const raw = '```glsl\nvoid main() { gl_FragColor = vec4(1.0); }\n```';
-    act(() => onResponse(raw));
+    const raw = '{"generator": "noise-flow", "palette": {"preset": "vapor"}, "motion": {"speed": 1.2}}';
+    await act(async () => onResponse(raw));
 
-    expect(engine().stageShader).toHaveBeenCalledWith(
+    expect(engine().stagePatch).toHaveBeenCalledWith(
       1,
-      'void main() { gl_FragColor = vec4(1.0); }',
+      expect.objectContaining({ generator: 'noise-flow', motion: { speed: 1.2 } }),
     );
     expect(await screen.findByText('Active')).toBeInTheDocument();
   });
@@ -262,10 +270,10 @@ describe('shader generation', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
 
     const onResponse = queue().enqueue.mock.calls[0][2];
-    act(() => onResponse('Sorry, I can only answer questions about cooking.'));
+    await act(async () => onResponse('Sorry, I can only answer questions about cooking.'));
 
-    expect(engine().stageShader).not.toHaveBeenCalled();
-    expect(await screen.findByText('No GLSL main() block found in the model response')).toBeInTheDocument();
+    expect(engine().stagePatch).not.toHaveBeenCalled();
+    expect(await screen.findByText('No JSON object found in the model response')).toBeInTheDocument();
 
     // Regenerate resubmits with the failed attempt attached as repair context
     fireEvent.click(screen.getByRole('button', { name: '⟲ Regenerate' }));
@@ -274,22 +282,23 @@ describe('shader generation', () => {
       'something',
       expect.any(Function),
       expect.objectContaining({
-        error: 'No GLSL main() block found in the model response',
+        error: 'No JSON object found in the model response',
       }),
-      null,
+      expect.any(String),
+      expect.any(Object),
     );
   });
 
-  it('a compile failure surfaces the GLSL error and repair context', async () => {
+  it('a staging failure surfaces the engine error and repair context', async () => {
     await renderApp();
-    engine().stageShader.mockReturnValueOnce({ ok: false, error: "ERROR: 'x' undeclared" });
+    engine().stagePatch.mockReturnValueOnce({ ok: false, error: 'render thread stopped' });
 
     fireEvent.change(deckPrompt(0), { target: { value: 'broken' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
     const onResponse = queue().enqueue.mock.calls[0][2];
-    act(() => onResponse('void main() { gl_FragColor = vec4(x); }'));
+    await act(async () => onResponse('{"generator": "bars"}'));
 
-    expect(await screen.findByText("ERROR: 'x' undeclared")).toBeInTheDocument();
+    expect(await screen.findByText('render thread stopped')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '⟲ Regenerate' }));
     expect(queue().enqueue).toHaveBeenLastCalledWith(
@@ -297,10 +306,11 @@ describe('shader generation', () => {
       'broken',
       expect.any(Function),
       {
-        code: 'void main() { gl_FragColor = vec4(x); }',
-        error: "ERROR: 'x' undeclared",
+        code: '{"generator":"bars"}',
+        error: 'render thread stopped',
       },
-      null,
+      expect.any(String),
+      expect.any(Object),
     );
   });
 
@@ -313,7 +323,14 @@ describe('shader generation', () => {
 
     fireEvent.change(deckPrompt(0), { target: { value: 'for scene b' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
-    expect(queue().enqueue).toHaveBeenCalledWith(4, 'for scene b', expect.any(Function), null, null);
+    expect(queue().enqueue).toHaveBeenCalledWith(
+      4,
+      'for scene b',
+      expect.any(Function),
+      null,
+      expect.any(String),
+      expect.any(Object),
+    );
   });
 });
 
@@ -504,7 +521,7 @@ describe('channel reset', () => {
     fireEvent.change(deckPrompt(0), { target: { value: 'keep me' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
     expect(deckPrompt(0)).toHaveValue('keep me');
-    expect(engine().stageShader).not.toHaveBeenCalled();
+    expect(engine().stagePatch).not.toHaveBeenCalled();
   });
 });
 
@@ -537,7 +554,7 @@ describe('session restore', () => {
       cueScene: 0,
       slots: [
         {
-          source: { type: 'shader', code: 'void main() { gl_FragColor = vec4(0.5); }' },
+          source: { type: 'shader', patch: { generator: 'tunnel', motion: { speed: 1.5 } } },
           prompt: 'restored prompt',
           opacity: 0.4,
           muted: false,
@@ -549,10 +566,10 @@ describe('session restore', () => {
     await renderApp();
 
     await waitFor(() =>
-      expect(engine().stageShader).toHaveBeenCalledWith(
-        0,
-        'void main() { gl_FragColor = vec4(0.5); }',
-      ),
+      expect(engine().stagePatch).toHaveBeenCalledWith(0, {
+        generator: 'tunnel',
+        motion: { speed: 1.5 },
+      }),
     );
     expect(deckPrompt(0)).toHaveValue('restored prompt');
     expect(screen.getByRole('slider', { name: 'Scene crossfader' })).toHaveValue('0.5');
@@ -646,7 +663,7 @@ describe('reset rig', () => {
     // dirty the rig: a prompt, a staged shader, a hot fader, a moved crossfader
     fireEvent.change(deckPrompt(0), { target: { value: 'about to vanish' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
-    act(() => queue().enqueue.mock.calls[0][2]('void main() { gl_FragColor = vec4(1.0); }'));
+    await act(async () => queue().enqueue.mock.calls[0][2]('{"generator": "plasma"}'));
     fireEvent.change(screen.getByRole('slider', { name: 'B3 opacity' }), {
       target: { value: '0.9' },
     });

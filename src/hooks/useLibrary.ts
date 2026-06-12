@@ -108,7 +108,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
         let entry: LibraryEntry;
         if (source.type === 'shader') {
           entry = await saveShader({
-            code: engine.getShaderBody(slot),
+            patch: engine.getPatch(slot),
             screenshot: engine.getPreviewDataURL(channel),
           });
         } else if (source.type === 'scene') {
@@ -199,7 +199,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
 
   const handleAddToChannel = useCallback(
     (entry: ShaderEntry, channel: number) =>
-      stageOntoSlot(slotIndex(cueScene, channel), { type: 'shader', code: entry.code }),
+      stageOntoSlot(slotIndex(cueScene, channel), { type: 'shader', patch: entry.patch }),
     [stageOntoSlot, cueScene],
   );
 
@@ -266,13 +266,15 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           }
           channels.push({ sceneId: sceneEntry.id, ...config });
         } else {
+          const patchJson = JSON.stringify(source.patch);
           let shaderEntry =
-            library.find((e) => isShaderEntry(e) && e.code === source.code) ||
-            newShaders.find((e) => e.code === source.code);
+            library.find(
+              (e): e is ShaderEntry => isShaderEntry(e) && JSON.stringify(e.patch) === patchJson,
+            ) || newShaders.find((e) => JSON.stringify(e.patch) === patchJson);
           if (!shaderEntry) {
             // eslint-disable-next-line no-await-in-loop
             shaderEntry = await saveShader({
-              code: source.code ?? '',
+              patch: source.patch,
               screenshot: engine.getPreviewDataURL(ch),
             });
             newShaders.push(shaderEntry);

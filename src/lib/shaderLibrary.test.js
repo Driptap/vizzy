@@ -32,8 +32,10 @@ beforeEach(async () => {
 const shaderFiles = () => fsSync.readdirSync(path.join(root, 'shaders'));
 
 describe('shader entries', () => {
+  const patch = { generator: 'plasma', palette: { preset: 'rainbow' } };
+
   it('saveShader persists an entry listShaders can read back', async () => {
-    const saved = await lib.saveShader({ name: 'Test', code: 'void main() {}', screenshot: 'data:thumb' });
+    const saved = await lib.saveShader({ name: 'Test', patch, screenshot: 'data:thumb' });
     expect(saved.id).toMatch(/^shader-/);
 
     const entries = await lib.listShaders();
@@ -41,21 +43,27 @@ describe('shader entries', () => {
   });
 
   it('listShaders returns entries newest-first', async () => {
-    await lib.updateEntry({ id: 'old', name: 'old', createdAt: 100 });
-    await lib.updateEntry({ id: 'new', name: 'new', createdAt: 300 });
-    await lib.updateEntry({ id: 'mid', name: 'mid', createdAt: 200 });
+    await lib.updateEntry({ id: 'old', name: 'old', patch, createdAt: 100 });
+    await lib.updateEntry({ id: 'new', name: 'new', patch, createdAt: 300 });
+    await lib.updateEntry({ id: 'mid', name: 'mid', patch, createdAt: 200 });
     expect((await lib.listShaders()).map((e) => e.id)).toEqual(['new', 'mid', 'old']);
   });
 
   it('listShaders skips unreadable files and non-JSON files', async () => {
-    const saved = await lib.saveShader({ code: 'x' });
+    const saved = await lib.saveShader({ patch });
     await fsp.writeFile(path.join(root, 'shaders', 'broken.json'), '{nope');
     await fsp.writeFile(path.join(root, 'shaders', 'notes.txt'), 'not an entry');
     expect(await lib.listShaders()).toEqual([saved]);
   });
 
+  it('listShaders drops pre-patch GLSL entries', async () => {
+    await lib.updateEntry({ id: 'legacy', code: 'void main() {}', createdAt: 999 });
+    const saved = await lib.saveShader({ patch });
+    expect(await lib.listShaders()).toEqual([saved]);
+  });
+
   it('renameShader rewrites the entry in place', async () => {
-    const saved = await lib.saveShader({ code: 'x' });
+    const saved = await lib.saveShader({ patch });
     const renamed = await lib.renameShader(saved, 'My Shader');
     expect(renamed).toEqual({ ...saved, name: 'My Shader' });
     expect(await lib.listShaders()).toEqual([renamed]);
@@ -63,7 +71,7 @@ describe('shader entries', () => {
   });
 
   it('deleteEntry removes the entry file and tolerates repeats', async () => {
-    const saved = await lib.saveShader({ code: 'x' });
+    const saved = await lib.saveShader({ patch });
     await lib.deleteEntry(saved);
     expect(await lib.listShaders()).toEqual([]);
     await expect(lib.deleteEntry(saved)).resolves.toBeUndefined();

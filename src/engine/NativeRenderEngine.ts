@@ -6,13 +6,14 @@
 // plus the staging entry points and the streamed-frame canvas painter.
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { DEFAULT_DECK_BODIES } from './shaders';
+import { DEFAULT_DECK_PATCHES } from '../lib/patches';
 import { buildSceneBuffers } from '../lib/sceneGenerator';
 import type {
   AudioBand,
   AutomationMap,
   ChannelSource,
   DeckLoop,
+  PatchSpec,
   SceneSpec,
   StageResult,
 } from '../types';
@@ -104,7 +105,7 @@ export class NativeRenderEngine {
 
   private slots: SlotState[];
   private sources: ChannelSource[];
-  private bodies: string[];
+  private patches: PatchSpec[];
   private xfade = 0;
   private cueScene = 0;
   private bpm = 120;
@@ -122,8 +123,8 @@ export class NativeRenderEngine {
     this.views = { a: viewCanvases.a ?? null, b: viewCanvases.b ?? null };
     this.previewCanvases = previewCanvases;
     this.slots = Array.from({ length: SLOTS }, defaultSlot);
-    this.bodies = [...DEFAULT_DECK_BODIES];
-    this.sources = this.bodies.map((code) => ({ type: 'shader', code }));
+    this.patches = [...DEFAULT_DECK_PATCHES];
+    this.sources = this.patches.map((patch) => ({ type: 'shader', patch }));
 
     invoke('render_start').catch((err) =>
       console.error('[Vizzy] Native render engine failed to start:', err),
@@ -314,11 +315,11 @@ export class NativeRenderEngine {
 
   // ---- staging ----
 
-  async stageShader(deckIndex: number, body: string): Promise<StageResult> {
+  async stagePatch(deckIndex: number, patch: PatchSpec): Promise<StageResult> {
     try {
-      await invoke('render_stage_shader', { slot: deckIndex, body });
-      this.bodies[deckIndex] = body;
-      this.sources[deckIndex] = { type: 'shader', code: body };
+      await invoke('render_stage_patch', { slot: deckIndex, spec: patch });
+      this.patches[deckIndex] = patch;
+      this.sources[deckIndex] = { type: 'shader', patch };
       return { ok: true };
     } catch (err) {
       return { ok: false, error: typeof err === 'string' ? err : String(err) };
@@ -386,15 +387,15 @@ export class NativeRenderEngine {
   }
 
   resetAllDecks(): void {
-    DEFAULT_DECK_BODIES.forEach((body, i) => {
-      void this.stageShader(i, body);
+    DEFAULT_DECK_PATCHES.forEach((patch, i) => {
+      void this.stagePatch(i, patch);
     });
   }
 
   // ---- introspection (used by library save flows) ----
 
-  getShaderBody(deckIndex: number): string {
-    return this.bodies[deckIndex];
+  getPatch(deckIndex: number): PatchSpec {
+    return this.patches[deckIndex];
   }
 
   getChannelSource(deckIndex: number): ChannelSource {

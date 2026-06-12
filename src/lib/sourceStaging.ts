@@ -8,6 +8,7 @@ import type {
   DeckChannelConfig,
   LibraryEntry,
   ModelEntry,
+  PatchSpec,
   SceneEntry,
   SceneSpec,
   SpriteEntry,
@@ -43,7 +44,7 @@ export async function stageSource(
     if (source.type === 'scene') {
       return failed(await engine.stageSceneSpec(slot, source.spec));
     }
-    return failed(await engine.stageShader(slot, source.code));
+    return failed(await engine.stagePatch(slot, source.patch));
   } catch (err) {
     console.error(`[Vizzy] Staging ${source.type} failed:`, err);
     const fallback = source.type === 'sprite' ? 'Image load failed' : 'Content load failed';
@@ -69,7 +70,7 @@ export function resolveSourceRef(
     landscapeId?: string;
     sceneId?: string;
     type?: string;
-    code?: string | null;
+    patch?: PatchSpec;
     spec?: SceneSpec;
   };
   // procedural scenes: session sources carry the spec inline, deck presets
@@ -108,12 +109,12 @@ export function resolveSourceRef(
   }
   if (anyRef.shaderId) {
     const entry = byId.get(anyRef.shaderId);
-    return entry && 'code' in entry && entry.code
-      ? { source: { type: 'shader', code: entry.code } }
-      : { error: 'Saved shader is missing from the library' };
+    return entry && 'patch' in entry && entry.patch
+      ? { source: { type: 'shader', patch: entry.patch } }
+      : { error: 'Saved patch is missing from the library' };
   }
-  if (anyRef.type === 'shader' && anyRef.code) {
-    return { source: { type: 'shader', code: anyRef.code } };
+  if (anyRef.type === 'shader' && anyRef.patch) {
+    return { source: { type: 'shader', patch: anyRef.patch } };
   }
   return { error: 'Nothing to stage' };
 }

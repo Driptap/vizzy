@@ -9,7 +9,6 @@ import {
   listInstalledModels,
   pullModel,
   GenerationQueue,
-  SYSTEM_PROMPT,
 } from './ollama';
 
 const jsonResponse = (data, ok = true, status = 200) => ({
@@ -168,41 +167,30 @@ describe('GenerationQueue', () => {
     expect(onStatus).not.toHaveBeenCalledWith(2, 'error', expect.anything());
   });
 
-  it('sends the system prompt and model in the request body', async () => {
+  it('sends the system prompt, model and structured-output format', async () => {
     fetch.mockResolvedValue(jsonResponse({ response: 'ok' }));
     const { queue } = makeQueue();
-    queue.enqueue(0, 'a plain gradient', vi.fn());
+    const format = { type: 'object', required: ['generator'] };
+    queue.enqueue(0, 'a plain gradient', vi.fn(), null, 'PATCH CONTRACT', format);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
     expect(body.model).toBe('test-model');
     expect(body.stream).toBe(false);
-    expect(body.prompt).toContain(SYSTEM_PROMPT);
+    expect(body.prompt).toContain('PATCH CONTRACT');
     expect(body.prompt).toContain('User request: a plain gradient');
+    expect(body.format).toEqual(format);
   });
 
-  it('appends a style recipe when the prompt matches one', async () => {
+  it('omits format when none is given', async () => {
     fetch.mockResolvedValue(jsonResponse({ response: 'ok' }));
     const { queue } = makeQueue();
-    queue.enqueue(0, 'an infinite fractal zoom', vi.fn());
+    queue.enqueue(0, 'a plain gradient', vi.fn(), null, 'SCENE CONTRACT');
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(body.prompt).toContain('## Style guidance — Escape-time fractals');
-  });
-
-  it('a system override replaces the GLSL prompt and skips recipes', async () => {
-    fetch.mockResolvedValue(jsonResponse({ response: 'ok' }));
-    const { queue } = makeQueue();
-    // 'fractal' would normally trigger a style recipe — the override wins
-    queue.enqueue(0, 'an infinite fractal tunnel', vi.fn(), null, 'CUSTOM SCENE CONTRACT');
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
-
-    const body = JSON.parse(fetch.mock.calls[0][1].body);
-    expect(body.prompt).toContain('CUSTOM SCENE CONTRACT');
-    expect(body.prompt).not.toContain(SYSTEM_PROMPT.slice(0, 60));
-    expect(body.prompt).not.toContain('## Style guidance');
-    expect(body.prompt).toContain('User request: an infinite fractal tunnel');
+    expect(body.prompt).toContain('SCENE CONTRACT');
+    expect('format' in body).toBe(false);
   });
 
   it('includes the failing code and error in a repair request', async () => {
