@@ -1,7 +1,7 @@
 {
   "name": "vizzy",
   "version": "0.1.0",
-  "description": "Vizzy — live VJ tool: LLM-generated GLSL shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled",
+  "description": "Vizzy \u2014 live VJ tool: LLM-generated GLSL shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled",
   "author": "Driptap",
   "license": "MIT",
   "homepage": "https://driptap.github.io/vizzy/",
@@ -12,6 +12,9 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "model:pull": "ollama pull qwen2.5-coder",
     "dist": "vite build && electron-builder"
   },
@@ -28,15 +31,22 @@
       "package.json"
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.music",
       "identity": null
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "AudioVideo"
     }
   },
@@ -47,13 +57,23 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.0",
     "cross-env": "^7.0.3",
     "electron": "^38.0.0",
     "electron-builder": "^26.15.2",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.0",
+    "typescript": "^6.0.3",
     "vite": "^7.1.0",
+    "vitest": "^4.1.8",
     "wait-on": "^8.0.1"
   }
 }
