@@ -1,8 +1,13 @@
 # Shader Generation Rework — from raw GLSL to a structured patch spec
 
-Status: **planned 2026-06-12** — supersedes Workstream A2/A3 of
-`3D_QUALITY_PLAN.md`. Workstream A's goal (generation success at or above the
-Electron baseline) stands; the route changes.
+Status: **G0–G3 implemented 2026-06-13** — supersedes Workstream A2/A3 of
+`3D_QUALITY_PLAN.md`. The composer (`src-tauri/src/render/patch.rs`) ships the
+full Wave-1 catalog (27 generators, 11 warps, 10 palette presets, feedback
+trails); generation runs through `PATCH_SYSTEM_PROMPT` + Ollama structured
+outputs; the GLSL ingest/sanitizer/repair path and naga glsl-in are deleted.
+Remaining: G4 stretch (waveform tap, simulation generators, expr→WGSL hook,
+MIDI-targetable params) and the operator's field validation — the three
+corpus prompts are the acceptance test.
 
 ## The evidence
 
