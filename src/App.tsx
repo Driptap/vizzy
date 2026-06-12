@@ -138,6 +138,7 @@ export default function App() {
           onSaveDeck={library.handleSaveDeckScene}
           onAssignDeck={library.handleAssignDeck}
           onAddModels={library.handleAddModels}
+          onAddPaths={library.handleAddPaths}
           onAssignModel={library.handleAssignModel}
           onAssignLandscape={library.handleAssignLandscape}
           onAddSprites={library.handleAddSprites}

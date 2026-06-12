@@ -1,8 +1,13 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { RenderEngine } from '../engine/RenderEngine';
 import { AudioEngine } from '../engine/AudioEngine';
+import { NativeAudioEngine } from '../engine/NativeAudioEngine';
 import { GenerationQueue, type DeckStatusCallback } from '../llm/ollama';
+import { isTauri } from '../platform';
 import type { PerformanceState } from './usePerformanceState';
+
+/** The audio surface the rig and controls share across both engines. */
+export type AudioEngineLike = AudioEngine | NativeAudioEngine;
 
 export type EngineRef = RefObject<RenderEngine | null>;
 
@@ -25,7 +30,7 @@ export function useEngineRig({
   onDeckStatus,
 }: EngineRigOptions) {
   const engineRef = useRef<RenderEngine | null>(null);
-  const audioRef = useRef<AudioEngine | null>(null);
+  const audioRef = useRef<AudioEngineLike | null>(null);
   const queueRef = useRef<GenerationQueue | null>(null);
 
   const getModelRef = useRef(getModel);
@@ -34,7 +39,9 @@ export function useEngineRig({
   onDeckStatusRef.current = onDeckStatus;
 
   useEffect(() => {
-    const audio = new AudioEngine();
+    // Tauri webviews lack getUserMedia/Web Audio reliability; capture and FFT
+    // run in the Rust core there instead.
+    const audio = isTauri() ? new NativeAudioEngine() : new AudioEngine();
     audioRef.current = audio;
 
     const engine = new RenderEngine(

@@ -33,7 +33,12 @@ import type {
 } from '../types';
 import { sampleLane } from '../lib/loopControls';
 import type { BlitView, Deck, DeckAudioUniforms, LightRig, SlotBaseParams, SlotUniforms } from './types';
-import type { AudioEngine } from './AudioEngine';
+import type { AudioLevels } from '../types';
+
+/** Per-frame band sampler — satisfied by both AudioEngine and NativeAudioEngine. */
+export interface AudioAnalyser {
+  update(): AudioLevels;
+}
 
 export { CHANNELS, SCENES };
 
@@ -57,7 +62,7 @@ interface AudioRoute {
 }
 
 export class RenderEngine {
-  audioEngine: AudioEngine | null;
+  audioEngine: AudioAnalyser | null;
   renderer: THREE.WebGLRenderer;
   views: Record<string, BlitView>;
   shaderError: string | null;
@@ -132,7 +137,7 @@ export class RenderEngine {
   constructor(
     viewCanvases: ViewCanvases,
     previewCanvases: (HTMLCanvasElement | null)[],
-    audioEngine: AudioEngine | null,
+    audioEngine: AudioAnalyser | null,
   ) {
     this.audioEngine = audioEngine;
     // The GL canvas is never shown: one context renders every composite pass

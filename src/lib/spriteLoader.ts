@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 
-const fs = window.require('fs/promises');
+import { getPlatform } from '../platform';
 
 export const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
 async function fileBitmap(filePath: string): Promise<ImageBitmap> {
-  const buf = await fs.readFile(filePath);
+  const buf = await getPlatform().fs.readBytes(filePath);
   return createImageBitmap(new Blob([buf as unknown as BlobPart]));
 }
 

@@ -13,7 +13,9 @@ import {
   hasSeededMarker,
   writeSeededMarker,
 } from '../lib/shaderLibrary';
-import { makeSpriteThumbnail } from '../lib/spriteLoader';
+import { makeSpriteThumbnail, SPRITE_EXTENSIONS } from '../lib/spriteLoader';
+import { MODEL_EXTENSIONS } from '../lib/modelLoader';
+import { getPlatform } from '../platform';
 import { stageSource, resolveSourceRef } from '../lib/sourceStaging';
 import {
   seedExampleLibrary,
@@ -127,12 +129,10 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     [engineRef, cueScene, prompts],
   );
 
-  const handleAddModels = useCallback(async (files: File[]) => {
+  const addModelPaths = useCallback(async (items: Array<{ sourcePath: string; name: string }>) => {
     try {
       const added: LibraryEntry[] = [];
-      for (const file of files) {
-        const sourcePath = filePathOf(file);
-        const name = file.name.replace(/\.[^.]+$/, '');
+      for (const { sourcePath, name } of items) {
         // eslint-disable-next-line no-await-in-loop
         added.push(await saveModel({ sourcePath, name }));
       }
@@ -142,12 +142,10 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
-  const handleAddSprites = useCallback(async (files: File[]) => {
+  const addSpritePaths = useCallback(async (items: Array<{ sourcePath: string; name: string }>) => {
     try {
       const added: LibraryEntry[] = [];
-      for (const file of files) {
-        const sourcePath = filePathOf(file);
-        const name = file.name.replace(/\.[^.]+$/, '');
+      for (const { sourcePath, name } of items) {
         // eslint-disable-next-line no-await-in-loop
         const screenshot = await makeSpriteThumbnail(sourcePath);
         // eslint-disable-next-line no-await-in-loop
@@ -158,6 +156,47 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
       console.error('[Vizzy] Adding sprite failed:', err);
     }
   }, []);
+
+  const toItems = (files: File[]) =>
+    files.flatMap((file) => {
+      const sourcePath = filePathOf(file);
+      if (!sourcePath) {
+        console.warn('[Vizzy] No filesystem path for dropped file:', file.name);
+        return [];
+      }
+      return [{ sourcePath, name: file.name.replace(/\.[^.]+$/, '') }];
+    });
+
+  const handleAddModels = useCallback(
+    (files: File[]) => addModelPaths(toItems(files)),
+    [addModelPaths],
+  );
+
+  const handleAddSprites = useCallback(
+    (files: File[]) => addSpritePaths(toItems(files)),
+    [addSpritePaths],
+  );
+
+  /** Route absolute paths (native drops / native picker) by extension. */
+  const handleAddPaths = useCallback(
+    async (paths: string[]) => {
+      const item = (p: string) => ({
+        sourcePath: p,
+        name: (p.split(/[/\\]/).pop() ?? p).replace(/\.[^.]+$/, ''),
+      });
+      const matches = (p: string, exts: string[]) =>
+        exts.some((ext) => p.toLowerCase().endsWith(ext));
+      const models = paths.filter((p) => matches(p, MODEL_EXTENSIONS)).map(item);
+      const sprites = paths.filter((p) => matches(p, SPRITE_EXTENSIONS)).map(item);
+      if (models.length) await addModelPaths(models);
+      if (sprites.length) await addSpritePaths(sprites);
+    },
+    [addModelPaths, addSpritePaths],
+  );
+
+  // Tauri reports file drops as native paths (the webview swallows DOM drops);
+  // Electron's subscription is a no-op and the DOM handlers keep working.
+  useEffect(() => getPlatform().onFileDrop((paths) => void handleAddPaths(paths)), [handleAddPaths]);
 
   const handleAssignSprite = useCallback(
     (entry: SpriteEntry, channel: number) => stageOntoSlot(slotIndex(cueScene, channel), { type: 'sprite', entry }),
@@ -350,6 +389,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleSaveDeck,
     handleAddModels,
     handleAddSprites,
+    handleAddPaths,
     handleAssignSprite,
     handleAssignModel,
     handleAssignLandscape,

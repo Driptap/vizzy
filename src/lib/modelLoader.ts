@@ -5,8 +5,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
-const fs = window.require('fs/promises');
-const path = window.require('path');
+import { getPlatform, extname } from '../platform';
 
 export const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
 
@@ -24,9 +23,10 @@ const bareMeshMaterial = () =>
   new THREE.MeshStandardMaterial({ color: 0xd8d8e8, roughness: 0.45, metalness: 0.25 });
 
 export async function loadModelObject(filePath: string): Promise<THREE.Object3D> {
-  const ext = path.extname(filePath).toLowerCase();
-  const buf = await fs.readFile(filePath);
-  const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  const ext = extname(filePath).toLowerCase();
+  const buf = await getPlatform().fs.readBytes(filePath);
+  const arrayBuffer = new ArrayBuffer(buf.byteLength);
+  new Uint8Array(arrayBuffer).set(buf);
 
   switch (ext) {
     case '.glb':

@@ -8,8 +8,7 @@ import {
 } from '../llm/ollama';
 import { MODEL_CATALOG } from '../llm/models';
 import type { PullProgress } from '../llm/ollama';
-
-const { ipcRenderer } = window.require('electron');
+import { getPlatform } from '../platform';
 
 function fmtBytes(n: number | undefined): string {
   if (!n) return '…';
@@ -70,10 +69,10 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }: SetupScre
       let base = await resolveServer();
       if (!base) {
         // a previously downloaded managed runtime can be restarted silently
-        const status = await ipcRenderer.invoke('vizzy:ollama-status');
+        const status = await getPlatform().ollama.status();
         if (status.installed) {
           setStage('starting');
-          if (await ipcRenderer.invoke('vizzy:ollama-start')) {
+          if (await getPlatform().ollama.start()) {
             setBaseUrl(MANAGED_BASE);
             base = MANAGED_BASE;
           }
@@ -99,15 +98,14 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }: SetupScre
   const handleInstall = useCallback(async () => {
     setStage('installing');
     setError(null);
-    const onProgress = (_evt: unknown, p: { phase: string; received: number; total: number }) => {
-      if (p.phase === 'download') setDownload({ received: p.received, total: p.total });
-      if (p.phase === 'extract') setDownload((d) => ({ ...d, extracting: true }));
-    };
-    ipcRenderer.on('vizzy:ollama-progress', onProgress);
     try {
-      await ipcRenderer.invoke('vizzy:ollama-install');
+      await getPlatform().ollama.install((p) => {
+        if (p.phase === 'download')
+          setDownload({ received: p.received ?? 0, total: p.total ?? 0 });
+        if (p.phase === 'extract') setDownload((d) => ({ ...d, extracting: true }));
+      });
       setStage('starting');
-      const ok = await ipcRenderer.invoke('vizzy:ollama-start');
+      const ok = await getPlatform().ollama.start();
       if (!ok) throw new Error('Ollama installed but the server failed to start');
       setBaseUrl(MANAGED_BASE);
       const tags = await listInstalledModels(MANAGED_BASE);
@@ -116,8 +114,6 @@ export function SetupScreen({ model, onModelChange, onReady, onSkip }: SetupScre
     } catch (err) {
       setError((err as Error).message || String(err));
       setStage('no-server');
-    } finally {
-      ipcRenderer.removeListener('vizzy:ollama-progress', onProgress);
     }
   }, []);
 

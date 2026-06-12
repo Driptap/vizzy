@@ -1,8 +1,8 @@
 import { useCallback, useState, type RefObject } from 'react';
-import type { AudioEngine } from '../engine/AudioEngine';
+import type { AudioEngineLike } from './useEngineRig';
 
-// Audio-input UI state over the AudioEngine owned by the rig.
-export function useAudioControls(audioRef: RefObject<AudioEngine | null>) {
+// Audio-input UI state over the audio engine owned by the rig.
+export function useAudioControls(audioRef: RefObject<AudioEngineLike | null>) {
   const [audioActive, setAudioActive] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDevice, setSelectedDevice] = useState('');

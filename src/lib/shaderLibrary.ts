@@ -1,6 +1,6 @@
 // File-backed shader library: one JSON file per shader in <userData>/shaders/.
-// window.require reaches Electron's node integration directly, bypassing the
-// Vite bundler (these modules don't exist in a browser build).
+// All host access (file IO, data dirs, dropped-file paths) goes through the
+// platform layer so the same code runs under Electron and Tauri.
 import type {
   AssetEntry,
   DeckChannelConfig,
@@ -12,94 +12,49 @@ import type {
   ShaderEntry,
   SpriteEntry,
 } from '../types';
-
-const { ipcRenderer, webUtils } = window.require('electron');
-const fs = window.require('fs/promises');
-const path = window.require('path');
-
-let dirPromise: Promise<string> | null = null;
-let modelsDirPromise: Promise<string> | null = null;
-
-function shadersDir(): Promise<string> {
-  if (!dirPromise) {
-    dirPromise = ipcRenderer.invoke('vizzy:get-shaders-dir').then(async (dir: string) => {
-      await fs.mkdir(dir, { recursive: true });
-      return dir;
-    });
-  }
-  return dirPromise;
-}
-
-function modelsDir(): Promise<string> {
-  if (!modelsDirPromise) {
-    modelsDirPromise = ipcRenderer.invoke('vizzy:get-models-dir').then(async (dir: string) => {
-      await fs.mkdir(dir, { recursive: true });
-      return dir;
-    });
-  }
-  return modelsDirPromise;
-}
-
-let spritesDirPromise: Promise<string> | null = null;
-
-function spritesDir(): Promise<string> {
-  if (!spritesDirPromise) {
-    spritesDirPromise = ipcRenderer.invoke('vizzy:get-sprites-dir').then(async (dir: string) => {
-      await fs.mkdir(dir, { recursive: true });
-      return dir;
-    });
-  }
-  return spritesDirPromise;
-}
+import { getPlatform, joinPath, extname } from '../platform';
 
 const makeId = (kind: string): string =>
   `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Absolute path of a dropped/picked File (File.path was removed in Electron)
-export function filePathOf(file: File): string {
-  return webUtils.getPathForFile(file);
-}
-
-let userDataDirPromise: Promise<string> | null = null;
-
-function userDataDir(): Promise<string> {
-  if (!userDataDirPromise) {
-    userDataDirPromise = ipcRenderer.invoke('vizzy:get-user-data-dir');
-  }
-  return userDataDirPromise;
+/**
+ * Absolute path of a dropped/picked File. Null on Tauri, where the webview
+ * reports drop paths natively instead (see Platform.onFileDrop).
+ */
+export function filePathOf(file: File): string | null {
+  return getPlatform().pathForFile(file);
 }
 
 // First-run marker as a FILE next to the library data — localStorage is
 // per-origin (dev server vs file://), so a localStorage-only flag re-seeds
 // whenever the app is launched a different way.
 export async function hasSeededMarker(): Promise<boolean> {
-  try {
-    await fs.access(path.join(await userDataDir(), '.vizzy-seeded'));
-    return true;
-  } catch {
-    return false;
-  }
+  const p = getPlatform();
+  return p.fs.exists(joinPath(await p.dirs.userData(), '.vizzy-seeded'));
 }
 
 export async function writeSeededMarker(): Promise<void> {
-  await fs
-    .writeFile(path.join(await userDataDir(), '.vizzy-seeded'), String(Date.now()))
+  const p = getPlatform();
+  await p.fs
+    .writeText(joinPath(await p.dirs.userData(), '.vizzy-seeded'), String(Date.now()))
     .catch(() => {});
 }
 
 async function writeEntry(entry: LibraryEntry): Promise<void> {
-  const dir = await shadersDir();
-  await fs.writeFile(path.join(dir, `${entry.id}.json`), JSON.stringify(entry));
+  const p = getPlatform();
+  const dir = await p.dirs.shaders();
+  await p.fs.writeText(joinPath(dir, `${entry.id}.json`), JSON.stringify(entry));
 }
 
 /** @returns newest-first array of library entries */
 export async function listShaders(): Promise<LibraryEntry[]> {
-  const dir = await shadersDir();
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.json'));
+  const p = getPlatform();
+  const dir = await p.dirs.shaders();
+  const files = (await p.fs.readDir(dir)).filter((f) => f.endsWith('.json'));
   const entries = await Promise.all(
     files.map(async (file): Promise<LibraryEntry | null> => {
       try {
-        return JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'));
+        return JSON.parse(await p.fs.readText(joinPath(dir, file)));
       } catch (err) {
         console.warn('[Vizzy] Skipping unreadable library file:', file, err);
         return null;
@@ -193,19 +148,20 @@ export async function saveModel({
   sourcePath: string;
   name?: string;
 }): Promise<ModelEntry> {
-  const dir = await modelsDir();
-  const ext = path.extname(sourcePath).toLowerCase();
+  const p = getPlatform();
+  const dir = await p.dirs.models();
+  const ext = extname(sourcePath).toLowerCase();
   const id = makeId('model');
   const file = `${id}${ext}`;
-  await fs.copyFile(sourcePath, path.join(dir, file));
+  await p.fs.copy(sourcePath, joinPath(dir, file));
   const entry: ModelEntry = { id, kind: 'model', name, file, screenshot: null, createdAt: Date.now() };
   await writeEntry(entry);
   return entry;
 }
 
 export async function getModelFilePath(entry: ModelEntry): Promise<string> {
-  const dir = await modelsDir();
-  return path.join(dir, entry.file);
+  const dir = await getPlatform().dirs.models();
+  return joinPath(dir, entry.file);
 }
 
 /** A sprite entry: an image file copied into <userData>/sprites/. */
@@ -218,19 +174,20 @@ export async function saveSprite({
   name?: string;
   screenshot?: string | null;
 }): Promise<SpriteEntry> {
-  const dir = await spritesDir();
-  const ext = path.extname(sourcePath).toLowerCase();
+  const p = getPlatform();
+  const dir = await p.dirs.sprites();
+  const ext = extname(sourcePath).toLowerCase();
   const id = makeId('sprite');
   const file = `${id}${ext}`;
-  await fs.copyFile(sourcePath, path.join(dir, file));
+  await p.fs.copy(sourcePath, joinPath(dir, file));
   const entry: SpriteEntry = { id, kind: 'sprite', name, file, screenshot, createdAt: Date.now() };
   await writeEntry(entry);
   return entry;
 }
 
 export async function getSpriteFilePath(entry: SpriteEntry): Promise<string> {
-  const dir = await spritesDir();
-  return path.join(dir, entry.file);
+  const dir = await getPlatform().dirs.sprites();
+  return joinPath(dir, entry.file);
 }
 
 /** Model/sprite entry from in-memory bytes (used by the first-run seeder). */
@@ -247,10 +204,11 @@ export async function saveAssetFromBuffer({
   ext: string;
   screenshot?: string | null;
 }): Promise<AssetEntry> {
-  const dir = kind === 'model' ? await modelsDir() : await spritesDir();
+  const p = getPlatform();
+  const dir = kind === 'model' ? await p.dirs.models() : await p.dirs.sprites();
   const id = makeId(kind);
   const file = `${id}${ext}`;
-  await fs.writeFile(path.join(dir, file), bytes);
+  await p.fs.writeBytes(joinPath(dir, file), bytes);
   const entry = { id, kind, name, file, screenshot, createdAt: Date.now() } as AssetEntry;
   await writeEntry(entry);
   return entry;
@@ -270,10 +228,11 @@ export async function updateEntry<T extends LibraryEntry>(entry: T): Promise<T> 
 export async function deleteEntry(
   entry: { id: string; kind?: string; file?: string },
 ): Promise<void> {
-  const dir = await shadersDir();
-  await fs.unlink(path.join(dir, `${entry.id}.json`)).catch(() => {});
+  const p = getPlatform();
+  const dir = await p.dirs.shaders();
+  await p.fs.remove(joinPath(dir, `${entry.id}.json`));
   if (entry.file && (entry.kind === 'model' || entry.kind === 'sprite')) {
-    const assetDir = entry.kind === 'model' ? await modelsDir() : await spritesDir();
-    await fs.unlink(path.join(assetDir, entry.file)).catch(() => {});
+    const assetDir = entry.kind === 'model' ? await p.dirs.models() : await p.dirs.sprites();
+    await p.fs.remove(joinPath(assetDir, entry.file));
   }
 }

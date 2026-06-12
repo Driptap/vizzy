@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getPlatform } from '../platform';
 import type {
   DeckEntry,
   LibraryEntry,
@@ -49,6 +50,7 @@ interface LibraryPanelProps {
   onSaveDeck: () => void | Promise<void>;
   onAssignDeck: (entry: DeckEntry, scene: number) => void;
   onAddModels: (files: File[]) => void;
+  onAddPaths: (paths: string[]) => void;
   onAssignModel: (entry: ModelEntry, channel: number) => void;
   onAssignLandscape: (entry: ModelEntry, channel: number) => void;
   onAddSprites: (files: File[]) => void;
@@ -70,6 +72,7 @@ export function LibraryPanel({
   onSaveDeck,
   onAssignDeck,
   onAddModels,
+  onAddPaths,
   onAssignModel,
   onAssignLandscape,
   onAddSprites,
@@ -174,7 +177,12 @@ export function LibraryPanel({
           <>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={async () => {
+                // native picker where the host has one (Tauri); DOM input on Electron
+                const paths = await getPlatform().pickFiles(fileTab.extensions);
+                if (paths === null) fileInputRef.current?.click();
+                else if (paths.length) onAddPaths(paths);
+              }}
               title={`Add files (${fileTab.extensions.join(', ')}) — or drag them into the list below`}
               className="mx-2 mt-2 rounded border border-neutral-700 py-1.5 text-[10px] font-bold tracking-wider text-neutral-300 transition-colors hover:border-cyan-500 hover:text-cyan-300"
             >
