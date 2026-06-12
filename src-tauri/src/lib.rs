@@ -26,6 +26,10 @@ pub fn run() {
             render::engine::render_start,
             render::engine::render_params,
             render::engine::render_stage_shader,
+            render::engine::render_stage_sprite,
+            render::engine::render_stage_model,
+            render::engine::render_stage_landscape,
+            render::engine::render_stage_scene,
             render::window::render_master,
             render::window::render_master_fullscreen,
         ])
