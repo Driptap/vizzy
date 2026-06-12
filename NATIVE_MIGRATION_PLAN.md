@@ -17,9 +17,14 @@
 > rigs). TS animates headless three.js state with the unchanged automation
 > functions and ships transforms in a per-deck ext block. glTF baseColorTexture
 > is skipped for now (factor + vertex colors only).
+> Phase 4 — the render core is self-driving: TS pushes state on change
+> (render_state); loops, AUT, audio routing and deck animation evaluate in
+> Rust every frame on the render clock (a hidden webview can no longer freeze
+> the master output). three.js is removed; the webview neither evaluates nor
+> renders.
 > Pending from the Phase 0 spike: LLM-generation half (needs a local Ollama +
-> model; the ingestion half is proven). Next: Phase 4 (loop/AUT evaluation
-> native), Phase 5 (Syphon/Spout).
+> model; the ingestion half is proven). In progress: Phase 5 (Syphon out;
+> Spout deferred — no Windows machine to validate against).
 
 Migrate Vizzy from Electron + Three.js to a **hybrid architecture**: the React UI stays
 web-based, while rendering, audio analysis, MIDI, and OS integration move into a native

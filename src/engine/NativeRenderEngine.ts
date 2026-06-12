@@ -114,6 +114,7 @@ export class NativeRenderEngine {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private unlistens: UnlistenFn[] = [];
   private masterClosedCbs: Array<() => void> = [];
+  private textureShareCbs: Array<(on: boolean) => void> = [];
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(viewCanvases: ViewCanvases, previewCanvases: (HTMLCanvasElement | null)[]) {
@@ -146,6 +147,11 @@ export class NativeRenderEngine {
     add(
       listen('vizzy://render-master-closed', () => {
         this.masterClosedCbs.forEach((cb) => cb());
+      }),
+    );
+    add(
+      listen<{ on: boolean }>('vizzy://texture-share', (e) => {
+        this.textureShareCbs.forEach((cb) => cb(e.payload.on));
       }),
     );
   }
@@ -422,6 +428,18 @@ export class NativeRenderEngine {
     this.masterClosedCbs.push(cb);
   }
 
+  // ---- Syphon texture sharing (macOS) ----
+
+  /** Toggle sharing the master composite with other VJ apps. Resolves to the
+   *  resulting share state; rejects on non-mac platforms or GPU failure. */
+  async setTextureShare(on: boolean): Promise<boolean> {
+    return invoke<boolean>('render_texture_share', { on });
+  }
+
+  onTextureShare(cb: (on: boolean) => void): void {
+    this.textureShareCbs.push(cb);
+  }
+
   dispose(): void {
     this.running = false;
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
@@ -429,6 +447,7 @@ export class NativeRenderEngine {
     this.unlistens.forEach((fn) => fn());
     this.unlistens = [];
     this.masterClosedCbs = [];
+    this.textureShareCbs = [];
   }
 }
 

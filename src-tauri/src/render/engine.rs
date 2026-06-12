@@ -1,6 +1,7 @@
 // Native render engine: 8 GLSL deck pipelines into offscreen targets, a WGSL
-// compositor for the scene/preview/master passes, JPEG readback events, and
-// an optional master-output surface — all driven by one render thread.
+// compositor for the scene/preview/master passes, JPEG readback events, a
+// persistent offscreen master target (blitted to the optional master-output
+// surface and shared over Syphon on macOS) — all driven by one render thread.
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
@@ -32,6 +33,16 @@ const PREVIEW_SIZE: (u32, u32) = (160, 90);
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const JPEG_QUALITY: u8 = 70;
 const FRAME_EVENT: &str = "vizzy://render-frame";
+#[cfg(target_os = "macos")]
+const TEXTURE_SHARE_EVENT: &str = "vizzy://texture-share";
+
+/// The master composite is always rendered to this persistent offscreen
+/// target; the window pass and Syphon both consume it. Bgra8Unorm because
+/// that's the IOSurface format Syphon publishes, which keeps the share on
+/// its zero-conversion blit path.
+const MASTER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+/// Master target size while no master window dictates one.
+const DEFAULT_MASTER_SIZE: (u32, u32) = (1920, 1080);
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -113,6 +124,13 @@ pub(crate) enum Job {
     },
     CloseMaster {
         reply: SyncSender<()>,
+    },
+    /// Start/stop the Syphon server (render thread owns it). Replies with
+    /// the resulting share state.
+    #[cfg(target_os = "macos")]
+    TextureShare {
+        on: bool,
+        reply: SyncSender<Result<bool, String>>,
     },
     Stop,
 }
@@ -380,6 +398,43 @@ pub async fn render_stage_scene(
     Ok(LandscapeMeta { span, cam_height })
 }
 
+/// Toggle Syphon texture sharing of the master composite. Returns the
+/// resulting share state and notifies the UI via TEXTURE_SHARE_EVENT.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn render_texture_share(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RenderState>,
+    on: bool,
+) -> Result<bool, String> {
+    let job_tx = state
+        .job_sender()
+        .ok_or_else(|| "render engine not started".to_string())?;
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    job_tx
+        .send(Job::TextureShare {
+            on,
+            reply: reply_tx,
+        })
+        .map_err(|_| "render thread stopped".to_string())?;
+    let sharing = reply_rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "render thread did not respond".to_string())??;
+    let _ = app.emit(TEXTURE_SHARE_EVENT, serde_json::json!({ "on": sharing }));
+    Ok(sharing)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn render_texture_share(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RenderState>,
+    on: bool,
+) -> Result<bool, String> {
+    let _ = (app, state, on);
+    Err("Texture sharing is macOS-only for now (Spout planned)".to_string())
+}
+
 struct ReadTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -387,6 +442,15 @@ struct ReadTarget {
     width: u32,
     height: u32,
     padded_row: u32,
+}
+
+/// The persistent offscreen master composite (see MASTER_FORMAT). Stored
+/// TOP-DOWN upright — fs_master renders with vs_present — so Syphon can
+/// publish it unflipped; the window pass re-flips while sampling.
+struct MasterTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
 }
 
 struct MasterOut {
@@ -521,10 +585,15 @@ pub(crate) struct GpuCore {
     compositor: wgpu::ShaderModule,
     deck_pipeline_layout: wgpu::PipelineLayout,
     comp_bind_layout: wgpu::BindGroupLayout,
-    comp_pipeline_layout: wgpu::PipelineLayout,
     scene_pipeline: wgpu::RenderPipeline,
     preview_pipeline: wgpu::RenderPipeline,
-    master_pipeline: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    master_pipeline: wgpu::RenderPipeline,
+    /// Window present blit, keyed by the surface's format.
+    present_pipeline: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    blit_bind_layout: wgpu::BindGroupLayout,
+    blit_pipeline_layout: wgpu::PipelineLayout,
+    master_target: MasterTarget,
+    master_bind_group: wgpu::BindGroup,
 
     deck_pipelines: Vec<Option<wgpu::RenderPipeline>>,
     deck_uniforms: Vec<wgpu::Buffer>,
@@ -712,6 +781,45 @@ impl GpuCore {
             "vs_fullscreen",
             wgpu::TextureFormat::Rgba8Unorm,
         );
+        // vs_present here stores the offscreen master top-down upright; the
+        // window blit and Syphon both rely on that (see MasterTarget).
+        let master_pipeline = Self::comp_pipeline(
+            &device,
+            &comp_pipeline_layout,
+            &compositor,
+            "fs_master",
+            "vs_present",
+            MASTER_FORMAT,
+        );
+
+        // Present blit: sampler + the master texture (binding 10, matching
+        // master_tex in compositor.wgsl).
+        let blit_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vizzy-blit-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vizzy-blit-layout"),
+            bind_group_layouts: &[Some(&blit_bind_layout)],
+            immediate_size: 0,
+        });
 
         // ---- non-shader deck content: sprite + mesh pipelines ----
         let sprite_bind_layout =
@@ -876,6 +984,9 @@ impl GpuCore {
             &comp_uniform,
             &deck_views,
         );
+        let master_target = Self::make_master_target(&device, DEFAULT_MASTER_SIZE);
+        let master_bind_group =
+            Self::make_blit_bind_group(&device, &blit_bind_layout, &sampler, &master_target.view);
 
         Ok(Self {
             adapter,
@@ -884,10 +995,14 @@ impl GpuCore {
             compositor,
             deck_pipeline_layout,
             comp_bind_layout,
-            comp_pipeline_layout,
             scene_pipeline,
             preview_pipeline,
-            master_pipeline: None,
+            master_pipeline,
+            present_pipeline: None,
+            blit_bind_layout,
+            blit_pipeline_layout,
+            master_target,
+            master_bind_group,
             deck_pipelines: (0..SLOT_COUNT).map(|_| None).collect(),
             deck_uniforms,
             deck_bind_groups,
@@ -1323,31 +1438,97 @@ impl GpuCore {
         buffer
     }
 
-    fn master_pipeline_for(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
-        let stale = !matches!(&self.master_pipeline, Some((f, _)) if *f == format);
+    fn make_master_target(device: &wgpu::Device, size: (u32, u32)) -> MasterTarget {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vizzy-master"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: MASTER_FORMAT,
+            // TEXTURE_BINDING for the window blit, COPY_SRC for Syphon's
+            // blit-copy publish (and test readbacks).
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        MasterTarget {
+            texture,
+            view,
+            size,
+        }
+    }
+
+    fn make_blit_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        master_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vizzy-blit-bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(master_view),
+                },
+            ],
+        })
+    }
+
+    /// Resize the offscreen master target (follows the master window when
+    /// open, DEFAULT_MASTER_SIZE otherwise).
+    fn ensure_master_size(&mut self, width: u32, height: u32) {
+        let size = (width.max(1), height.max(1));
+        if self.master_target.size == size {
+            return;
+        }
+        self.master_target = Self::make_master_target(&self.device, size);
+        self.master_bind_group = Self::make_blit_bind_group(
+            &self.device,
+            &self.blit_bind_layout,
+            &self.sampler,
+            &self.master_target.view,
+        );
+    }
+
+    fn present_pipeline_for(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        let stale = !matches!(&self.present_pipeline, Some((f, _)) if *f == format);
         if stale {
             let pipeline = Self::comp_pipeline(
                 &self.device,
-                &self.comp_pipeline_layout,
+                &self.blit_pipeline_layout,
                 &self.compositor,
-                "fs_master",
-                "vs_present",
+                "fs_blit",
+                "vs_fullscreen",
                 format,
             );
-            self.master_pipeline = Some((format, pipeline));
+            self.present_pipeline = Some((format, pipeline));
         }
-        &self.master_pipeline.as_ref().expect("just set").1
+        &self.present_pipeline.as_ref().expect("just set").1
     }
 
     /// Encode and submit one full frame: 8 deck passes, the scene + preview
-    /// passes with their staging copies, and optionally the master pass.
+    /// passes with their staging copies, the offscreen master pass, and —
+    /// when the master window is open — a blit onto its surface.
     fn frame(
         &mut self,
         frame: &EvaluatedFrame,
         time: f32,
         scene: u32,
         preview_slot: u32,
-        master_view: Option<(&wgpu::TextureView, wgpu::TextureFormat)>,
+        surface: Option<(&wgpu::TextureView, wgpu::TextureFormat)>,
     ) {
         let (dw, dh) = self.deck_size;
         let deck_aspect = dw as f32 / dh as f32;
@@ -1435,9 +1616,9 @@ impl GpuCore {
         self.queue
             .write_buffer(&self.comp_uniform, 0, &floats_to_bytes(&comp));
 
-        // The master pipeline borrow must end before encoding starts.
-        if let Some((_, format)) = master_view {
-            self.master_pipeline_for(format);
+        // The present pipeline borrow must end before encoding starts.
+        if let Some((_, format)) = surface {
+            self.present_pipeline_for(format);
         }
 
         let mut encoder = self
@@ -1557,13 +1738,37 @@ impl GpuCore {
             );
         }
 
-        if let Some((view, format)) = master_view {
-            let pipeline = match &self.master_pipeline {
-                Some((f, p)) if *f == format => p,
-                _ => unreachable!("master pipeline prepared above"),
-            };
+        // Master composite, always rendered offscreen: the window blit below
+        // and the Syphon publish (after submit) both read this target.
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("vizzy-master-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.master_target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.master_pipeline);
+            pass.set_bind_group(0, &self.comp_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        if let Some((view, format)) = surface {
+            let pipeline = match &self.present_pipeline {
+                Some((f, p)) if *f == format => p,
+                _ => unreachable!("present pipeline prepared above"),
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("vizzy-present-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     depth_slice: None,
@@ -1579,7 +1784,7 @@ impl GpuCore {
                 multiview_mask: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.comp_bind_group, &[]);
+            pass.set_bind_group(0, &self.master_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -1647,6 +1852,8 @@ fn render_loop(
     let mut evaluator = Evaluator::new();
     let mut last_time: Option<f32> = None;
     let mut master: Option<MasterOut> = None;
+    #[cfg(target_os = "macos")]
+    let mut syphon: Option<super::syphon::SyphonOut> = None;
     let mut frame: u64 = 0;
     let mut next_frame = Instant::now();
 
@@ -1709,6 +1916,21 @@ fn render_loop(
                     master = None;
                     let _ = reply.send(());
                 }
+                #[cfg(target_os = "macos")]
+                Ok(Job::TextureShare { on, reply }) => {
+                    let result = match (on, &syphon) {
+                        (true, None) => super::syphon::SyphonOut::new(&core.device).map(|out| {
+                            syphon = Some(out);
+                            true
+                        }),
+                        (true, Some(_)) => Ok(true),
+                        (false, _) => {
+                            syphon = None; // drop stops the server
+                            Ok(false)
+                        }
+                    };
+                    let _ = reply.send(result);
+                }
                 Ok(Job::Stop) | Err(TryRecvError::Disconnected) => return,
                 Err(TryRecvError::Empty) => break,
             }
@@ -1724,6 +1946,12 @@ fn render_loop(
         let evaluated = evaluator.evaluate(&msg, raw, time, dt);
 
         core.ensure_aspect(evaluated.aspect);
+        // The offscreen master follows the window size when one is open.
+        let (mw, mh) = master
+            .as_ref()
+            .map(|m| unpack_size(m.size.load(Ordering::Relaxed)))
+            .unwrap_or(DEFAULT_MASTER_SIZE);
+        core.ensure_master_size(mw, mh);
         let scene = (frame % 2) as u32;
         let channel = (frame % 4) as u32;
         let preview_slot = evaluated.cue_scene.min(1) * 4 + channel;
@@ -1754,6 +1982,13 @@ fn render_loop(
         } else {
             false
         };
+
+        // Publish AFTER wgpu's submit so Syphon's copy is ordered behind the
+        // master pass (Metal hazard-tracks the texture across queues).
+        #[cfg(target_os = "macos")]
+        if let Some(out) = syphon.as_mut() {
+            out.publish(&core.master_target.texture, core.master_target.size);
+        }
 
         if let Some(rgba) = core.read_target_rgba(&core.scene_target) {
             if let Some(jpeg_base64) = encode_jpeg_base64(&rgba, SCENE_SIZE.0, SCENE_SIZE.1) {
@@ -1841,6 +2076,7 @@ mod tests {
             "fs_scene",
             "fs_master",
             "fs_preview",
+            "fs_blit",
         ] {
             assert!(entries.contains(&entry), "missing entry point {entry}");
         }
@@ -1945,10 +2181,11 @@ mod tests {
         let mut frame = EvaluatedFrame::default();
         frame.slots[0].uniforms.mix = 1.0; // all other mixes default to 0
 
-        // Offscreen stand-in for the master surface.
+        // Stand-in for the master window's surface texture.
         let (mw, mh) = (640u32, 360u32);
-        let master_tex = core.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("test-master"),
+        core.ensure_master_size(mw, mh);
+        let surface_tex = core.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test-surface"),
             size: wgpu::Extent3d {
                 width: mw,
                 height: mh,
@@ -1961,19 +2198,20 @@ mod tests {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let master_view = master_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let surface_view = surface_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         core.frame(
             &frame,
             0.5,
             0,
             0,
-            Some((&master_view, wgpu::TextureFormat::Rgba8Unorm)),
+            Some((&surface_view, wgpu::TextureFormat::Rgba8Unorm)),
         );
 
-        // Master pass (vs_present): stored top-down, so no flip — the top of
-        // the image is the first rows.
-        let padded = read_texture(&core, &master_tex, mw, mh);
+        // Offscreen master (vs_present): stored top-down, so no flip — the
+        // top of the image is the first rows. (BGRA byte order; the luma
+        // helper sums all three colour bytes, so order doesn't matter.)
+        let padded = read_texture(&core, &core.master_target.texture, mw, mh);
         let master = unpad_rows(&padded, mw as usize, mh as usize);
         assert!(
             master.iter().any(|&b| b > 8),
@@ -1985,6 +2223,17 @@ mod tests {
         assert!(
             top > bottom + 30.0,
             "master should be brighter on top (top={top:.1}, bottom={bottom:.1})"
+        );
+
+        // The window present blit re-flips the top-down master while
+        // sampling, so the surface is upright too.
+        let padded = read_texture(&core, &surface_tex, mw, mh);
+        let surface = unpad_rows(&padded, mw as usize, mh as usize);
+        let top = mean_luma_of_rows(&surface, mw as usize, 0..h / 2);
+        let bottom = mean_luma_of_rows(&surface, mw as usize, h / 2..h);
+        assert!(
+            top > bottom + 30.0,
+            "present blit should be brighter on top (top={top:.1}, bottom={bottom:.1})"
         );
 
         // Scene readback through the production path (bottom-up storage +
@@ -2007,6 +2256,33 @@ mod tests {
         let jpeg = encode_jpeg_base64(&preview, PREVIEW_SIZE.0, PREVIEW_SIZE.1)
             .expect("preview JPEG encodes");
         assert!(!jpeg.is_empty());
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_offscreen_master_renders_default_decks_non_black() {
+        let mut core = boot_core();
+        for (slot, phase) in ingest::DEFAULT_DECK_PHASES.iter().enumerate() {
+            let module = ingest::validate_deck_shader(&ingest::default_deck_body(*phase)).unwrap();
+            core.set_deck_pipeline(slot, module).unwrap();
+        }
+        let mut frame = EvaluatedFrame::default();
+        for slot in &mut frame.slots {
+            slot.uniforms.mix = 1.0;
+        }
+
+        // No window, no Syphon: the master must still render offscreen.
+        core.frame(&frame, 0.5, 0, 0, None);
+
+        let (mw, mh) = core.master_target.size;
+        assert_eq!((mw, mh), DEFAULT_MASTER_SIZE);
+        let padded = read_texture(&core, &core.master_target.texture, mw, mh);
+        let master = unpad_rows(&padded, mw as usize, mh as usize);
+        let luma = mean_luma_of_rows(&master, mw as usize, 0..mh as usize);
+        assert!(
+            luma > 2.0,
+            "offscreen master with default decks should not be black (mean luma {luma:.2})"
+        );
     }
 
     fn unpad_rows(data: &[u8], width: usize, height: usize) -> Vec<u8> {

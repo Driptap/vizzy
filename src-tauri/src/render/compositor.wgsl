@@ -5,8 +5,12 @@
 // convention — LLM deck shaders assume it). vs_fullscreen maps clip y = +1
 // (texture row 0) to vUv.y = 0, so every offscreen target is stored bottom-up
 // and inter-pass sampling needs no flips — exactly like WebGL framebuffers.
-// CPU readbacks flip rows to get an upright JPEG; the master window pass uses
-// vs_present (vUv = clip * 0.5 + 0.5) so the surface displays upright.
+// CPU readbacks flip rows to get an upright JPEG. The master composite is the
+// exception: fs_master renders OFFSCREEN with vs_present (vUv = clip * 0.5 +
+// 0.5), storing it TOP-DOWN upright — Metal-native orientation, so Syphon
+// publishes it as-is (flipped:NO, fast blit path). The window present pass
+// (fs_blit) then samples that top-down texture with vs_fullscreen uvs, which
+// re-flips it so the surface also displays upright.
 
 struct Slot {
   // mix, scale, layer, unused
@@ -35,6 +39,9 @@ struct Uniforms {
 @group(0) @binding(7) var deck5: texture_2d<f32>;
 @group(0) @binding(8) var deck6: texture_2d<f32>;
 @group(0) @binding(9) var deck7: texture_2d<f32>;
+// Present-blit input: the offscreen master target (its own bind group layout
+// pairs this with the binding-0 sampler; the deck bindings stay untouched).
+@group(0) @binding(10) var master_tex: texture_2d<f32>;
 
 struct VsOut {
   @builtin(position) pos: vec4<f32>,
@@ -160,6 +167,14 @@ fn fs_master(in: VsOut) -> @location(0) vec4<f32> {
   let b = stack_b(in.uv);
   let c = a * (1.0 - uni.globals.z) + b * uni.globals.z;
   return vec4<f32>(min(c, vec3<f32>(1.0)), 1.0);
+}
+
+// Window present pass: blit the top-down offscreen master onto the surface.
+// vs_fullscreen's uv flip undoes the texture's top-down storage, so the
+// window shows it upright.
+@fragment
+fn fs_blit(in: VsOut) -> @location(0) vec4<f32> {
+  return vec4<f32>(textureSampleLevel(master_tex, samp, in.uv, 0.0).rgb, 1.0);
 }
 
 // Single-deck preview through the same transform the composites apply,

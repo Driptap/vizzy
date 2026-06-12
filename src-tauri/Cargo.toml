@@ -33,6 +33,18 @@ gltf = "1.4"
 tobj = "4.0"
 stl_io = "0.8"
 
+# Syphon texture sharing (src/render/syphon.rs): raw objc2 messaging into the
+# vendored Syphon.framework, plus typed Metal handles shared with wgpu-hal.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSGeometry"] }
+objc2-metal = { version = "0.3", features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLTexture",
+] }
+
 [profile.release]
 strip = true
 lto = true
