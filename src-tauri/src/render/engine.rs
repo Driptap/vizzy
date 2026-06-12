@@ -17,11 +17,14 @@ use tauri::Emitter;
 use wgpu::naga;
 
 use super::content;
+use super::evaluate::{ContentAnim, Evaluator};
 use super::ingest;
 use super::params::{
-    floats_to_bytes, pack_compositor_uniform, pack_deck_uniform, unpack_deck_ext, unpack_slot,
-    unpad_and_flip_rows, DeckExt, RenderParams, SLOT_COUNT, UNIFORM_FLOATS,
+    floats_to_bytes, pack_compositor_uniform, pack_deck_uniform, unpad_and_flip_rows, DeckDraw,
+    EvaluatedFrame, SLOT_COUNT, UNIFORM_FLOATS,
 };
+use super::state::RenderStateMsg;
+use crate::audio::RawLevels;
 
 const DECK_WIDTH: u32 = 960;
 const SCENE_SIZE: (u32, u32) = (480, 270);
@@ -53,15 +56,36 @@ pub(crate) struct StagedMesh {
 
 pub(crate) enum StagedMeshKind {
     Model,
-    /// Endless-flight tile (landscape or scene). The tile base scale `s` and
-    /// the z-mirror are STAGED state: the TS client animates tiles around
-    /// unit scale, so they can't travel in the per-frame ext block.
+    /// Endless-flight tile (landscape or scene). Everything here is STAGED
+    /// state: the evaluator animates the camera/tiles around it per frame.
     Flight {
         base_scale: f32,
         span: f32,
+        cam_height: f32,
+        through: bool,
         rig: content::Rig,
         fog_color: [f32; 3],
     },
+}
+
+impl StagedMeshKind {
+    /// The animation state machine a freshly staged mesh starts with.
+    fn content_anim(&self) -> ContentAnim {
+        match self {
+            StagedMeshKind::Model => ContentAnim::Model { spin: 0.0 },
+            StagedMeshKind::Flight {
+                span,
+                cam_height,
+                through,
+                ..
+            } => ContentAnim::Flight {
+                through: *through,
+                span: *span,
+                cam_height: *cam_height,
+                scroll: 0.0,
+            },
+        }
+    }
 }
 
 pub(crate) enum Job {
@@ -96,7 +120,7 @@ pub(crate) enum Job {
 struct Engine {
     job_tx: Sender<Job>,
     thread: Option<JoinHandle<()>>,
-    params: Arc<Mutex<RenderParams>>,
+    state: Arc<Mutex<RenderStateMsg>>,
     instance: Arc<wgpu::Instance>,
 }
 
@@ -133,11 +157,13 @@ impl RenderState {
 pub fn render_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, RenderState>,
+    audio: tauri::State<'_, crate::audio::AudioState>,
 ) -> Result<(), String> {
     let mut guard = lock(&state.inner);
     if guard.is_some() {
         return Ok(());
     }
+    let audio_raw = audio.raw_levels();
 
     let instance = Arc::new(wgpu::Instance::new(
         wgpu::InstanceDescriptor::new_without_display_handle(),
@@ -155,8 +181,8 @@ pub fn render_start(
         eprintln!("[vizzy render] uncaptured wgpu error: {e}");
     }));
 
-    let params = Arc::new(Mutex::new(RenderParams::default()));
-    let aspect = lock(&params).aspect;
+    let shared_state = Arc::new(Mutex::new(RenderStateMsg::default()));
+    let aspect = lock(&shared_state).aspect;
     let mut core = GpuCore::new(adapter, device, queue, aspect)?;
     for (slot, phase) in ingest::DEFAULT_DECK_PHASES.iter().enumerate() {
         let module = ingest::validate_deck_shader(&ingest::default_deck_body(*phase))?;
@@ -164,25 +190,28 @@ pub fn render_start(
     }
 
     let (job_tx, job_rx) = mpsc::channel();
-    let thread_params = params.clone();
+    let thread_state = shared_state.clone();
     let thread = std::thread::Builder::new()
         .name("vizzy-render".into())
-        .spawn(move || render_loop(core, app, thread_params, job_rx))
+        .spawn(move || render_loop(core, app, thread_state, audio_raw, job_rx))
         .map_err(|e| format!("failed to spawn render thread: {e}"))?;
 
     *guard = Some(Engine {
         job_tx,
         thread: Some(thread),
-        params,
+        state: shared_state,
         instance,
     });
     Ok(())
 }
 
+/// The TS client pushes full control STATE here on change (coalesced); the
+/// render thread evaluates it every frame on its own clock, so the master
+/// output keeps running even when the webview is hidden and rAF stalls.
 #[tauri::command]
-pub fn render_params(state: tauri::State<'_, RenderState>, params: RenderParams) {
-    if let Some(engine) = lock(&state.inner).as_ref() {
-        *lock(&engine.params) = params;
+pub fn render_state(engine: tauri::State<'_, RenderState>, state: RenderStateMsg) {
+    if let Some(engine) = lock(&engine.inner).as_ref() {
+        *lock(&engine.state) = state;
     }
 }
 
@@ -300,6 +329,8 @@ pub async fn render_stage_landscape(
         kind: StagedMeshKind::Flight {
             base_scale: layout.base_scale,
             span,
+            cam_height,
+            through: false,
             rig: content::LANDSCAPE_RIG,
             fog_color: [0.0, 0.0, 0.0], // landscapes fade to black
         },
@@ -335,6 +366,8 @@ pub async fn render_stage_scene(
         kind: StagedMeshKind::Flight {
             base_scale: layout.base_scale,
             span,
+            cam_height,
+            through,
             rig: content::SCENE_RIG,
             fog_color,
         },
@@ -1310,7 +1343,7 @@ impl GpuCore {
     /// passes with their staging copies, and optionally the master pass.
     fn frame(
         &mut self,
-        params: &RenderParams,
+        frame: &EvaluatedFrame,
         time: f32,
         scene: u32,
         preview_slot: u32,
@@ -1320,17 +1353,17 @@ impl GpuCore {
         let deck_aspect = dw as f32 / dh as f32;
         let mut draws = [SlotDraw::Shader; SLOT_COUNT];
         for (i, draw) in draws.iter_mut().enumerate() {
-            let slot = unpack_slot(&params.slots, i);
-            let uniform = pack_deck_uniform(dw as f32, dh as f32, time, slot.audio);
+            let slot = &frame.slots[i];
+            let uniform = pack_deck_uniform(dw as f32, dh as f32, time, slot.uniforms.audio);
             self.queue
                 .write_buffer(&self.deck_uniforms[i], 0, &floats_to_bytes(&uniform));
 
-            // The ext mode picks what to draw, the staged content supplies
-            // the resources; a mismatch (frame in flight during a swap)
-            // leaves the slot transparent for that frame.
-            *draw = match (unpack_deck_ext(&params.decks, i), &self.deck_content[i]) {
-                (DeckExt::Shader, _) => SlotDraw::Shader,
-                (DeckExt::Sprite(s), DeckContent::Sprite { .. }) => {
+            // The evaluated draw picks what to render, the staged content
+            // supplies the resources; a mismatch (frame in flight during a
+            // swap) leaves the slot transparent for that frame.
+            *draw = match (&slot.draw, &self.deck_content[i]) {
+                (DeckDraw::Shader, _) => SlotDraw::Shader,
+                (DeckDraw::Sprite(s), DeckContent::Sprite { .. }) => {
                     if !s.visible {
                         SlotDraw::Nothing
                     } else {
@@ -1344,7 +1377,7 @@ impl GpuCore {
                     }
                 }
                 (
-                    DeckExt::Model(m),
+                    DeckDraw::Model(m),
                     DeckContent::Mesh {
                         kind: StagedMeshKind::Model,
                         ..
@@ -1353,14 +1386,14 @@ impl GpuCore {
                     if !m.visible {
                         SlotDraw::Nothing
                     } else {
-                        let u = content::pack_model_uniform(&m, deck_aspect);
+                        let u = content::pack_model_uniform(m, deck_aspect);
                         self.queue
                             .write_buffer(&self.mesh_uniforms[i][0], 0, &floats_to_bytes(&u));
                         SlotDraw::Model
                     }
                 }
                 (
-                    DeckExt::Flight(f),
+                    DeckDraw::Flight(f),
                     DeckContent::Mesh {
                         kind:
                             StagedMeshKind::Flight {
@@ -1368,6 +1401,7 @@ impl GpuCore {
                                 span,
                                 rig,
                                 fog_color,
+                                ..
                             },
                         ..
                     },
@@ -1377,7 +1411,7 @@ impl GpuCore {
                     } else {
                         for tile in 0..2 {
                             let u = content::pack_flight_uniform(
-                                &f,
+                                f,
                                 tile,
                                 *base_scale,
                                 *span,
@@ -1397,7 +1431,7 @@ impl GpuCore {
                 _ => SlotDraw::Nothing,
             };
         }
-        let comp = pack_compositor_uniform(params, time, scene, preview_slot);
+        let comp = pack_compositor_uniform(frame, time, scene, preview_slot);
         self.queue
             .write_buffer(&self.comp_uniform, 0, &floats_to_bytes(&comp));
 
@@ -1605,10 +1639,13 @@ fn encode_jpeg_base64(rgba: &[u8], width: u32, height: u32) -> Option<String> {
 fn render_loop(
     mut core: GpuCore,
     app: tauri::AppHandle,
-    params: Arc<Mutex<RenderParams>>,
+    state: Arc<Mutex<RenderStateMsg>>,
+    audio_raw: RawLevels,
     jobs: Receiver<Job>,
 ) {
     let start = Instant::now();
+    let mut evaluator = Evaluator::new();
+    let mut last_time: Option<f32> = None;
     let mut master: Option<MasterOut> = None;
     let mut frame: u64 = 0;
     let mut next_frame = Instant::now();
@@ -1621,7 +1658,11 @@ fn render_loop(
                     module,
                     reply,
                 }) => {
-                    let _ = reply.send(core.set_deck_pipeline(slot, *module));
+                    let result = core.set_deck_pipeline(slot, *module);
+                    if result.is_ok() {
+                        evaluator.set_content(slot, ContentAnim::Shader);
+                    }
+                    let _ = reply.send(result);
                 }
                 Ok(Job::StageSprite {
                     slot,
@@ -1630,10 +1671,25 @@ fn render_loop(
                     rgba,
                     reply,
                 }) => {
-                    let _ = reply.send(core.stage_sprite(slot, width, height, &rgba));
+                    let result = core.stage_sprite(slot, width, height, &rgba);
+                    if result.is_ok() {
+                        evaluator.set_content(
+                            slot,
+                            ContentAnim::Sprite {
+                                image_aspect: width as f32 / height.max(1) as f32,
+                                spin: 0.0,
+                            },
+                        );
+                    }
+                    let _ = reply.send(result);
                 }
                 Ok(Job::StageMesh { slot, mesh, reply }) => {
-                    let _ = reply.send(core.stage_mesh(slot, *mesh));
+                    let content = mesh.kind.content_anim();
+                    let result = core.stage_mesh(slot, *mesh);
+                    if result.is_ok() {
+                        evaluator.set_content(slot, content);
+                    }
+                    let _ = reply.send(result);
                 }
                 Ok(Job::OpenMaster {
                     surface,
@@ -1658,12 +1714,19 @@ fn render_loop(
             }
         }
 
-        let p = lock(&params).clone();
-        core.ensure_aspect(p.aspect);
+        // Evaluate loops/AUT/audio routing on the render clock — the webview
+        // only pushes state changes, so a hidden UI can't stall the output.
+        let msg = lock(&state).clone();
+        let raw = *lock(&audio_raw);
         let time = start.elapsed().as_secs_f32();
+        let dt = (time - last_time.unwrap_or(time)).min(0.1);
+        last_time = Some(time);
+        let evaluated = evaluator.evaluate(&msg, raw, time, dt);
+
+        core.ensure_aspect(evaluated.aspect);
         let scene = (frame % 2) as u32;
         let channel = (frame % 4) as u32;
-        let preview_slot = p.cue_scene.min(1) * 4 + channel;
+        let preview_slot = evaluated.cue_scene.min(1) * 4 + channel;
 
         let master_frame = master
             .as_mut()
@@ -1678,7 +1741,7 @@ fn render_loop(
         });
 
         core.frame(
-            &p,
+            &evaluated,
             time,
             scene,
             preview_slot,
@@ -1879,8 +1942,8 @@ mod tests {
                 .unwrap();
         core.set_deck_pipeline(0, module).unwrap();
 
-        let mut params = RenderParams::default();
-        params.slots[0] = 1.0; // slot 0 mix full; all other mixes default to 0
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].uniforms.mix = 1.0; // all other mixes default to 0
 
         // Offscreen stand-in for the master surface.
         let (mw, mh) = (640u32, 360u32);
@@ -1901,7 +1964,7 @@ mod tests {
         let master_view = master_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         core.frame(
-            &params,
+            &frame,
             0.5,
             0,
             0,
@@ -1986,11 +2049,17 @@ mod tests {
         assert_eq!((w, h), (16, 16));
         core.stage_sprite(0, w, h, &rgba).expect("stages");
 
-        // Slot 0 ext: sprite scaled to fill the whole target, no warp.
-        let mut params = RenderParams::default();
-        let ext = [1.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0];
-        params.decks[..ext.len()].copy_from_slice(&ext);
-        core.frame(&params, 0.0, 0, 0, None);
+        // Slot 0 draw: sprite scaled to fill the whole target, no warp.
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].draw = DeckDraw::Sprite(super::super::params::SpriteDraw {
+            m: [2.0, 0.0, 0.0, 2.0],
+            t: [0.0, 0.0],
+            distort: 0.0,
+            skew: 0.0,
+            opacity: 1.0,
+            visible: true,
+        });
+        core.frame(&frame, 0.0, 0, 0, None);
 
         let (dw, dh) = core.deck_size;
         let (dw, dh) = (dw as usize, dh as usize);
@@ -2035,6 +2104,8 @@ mod tests {
             kind: StagedMeshKind::Flight {
                 base_scale: layout.base_scale,
                 span,
+                cam_height: 0.0,
+                through: true,
                 rig: content::SCENE_RIG,
                 fog_color: [0.0, 0.0, 0.0],
             },
@@ -2043,12 +2114,18 @@ mod tests {
 
         // Camera 0.5 in front of tile 0's triangle, identity quat (looking
         // -z), fov 64 — inside the fog near plane, so mostly unfogged.
-        let mut params = RenderParams::default();
-        let ext = [
-            3.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0, -span, 1.0, 1.0, 0.0, 1.0, 64.0,
-        ];
-        params.decks[..ext.len()].copy_from_slice(&ext);
-        core.frame(&params, 0.0, 0, 0, None);
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].draw = DeckDraw::Flight(super::super::params::FlightDraw {
+            cam: [0.0, 0.0, 0.5],
+            quat: [0.0, 0.0, 0.0, 1.0],
+            tile_z: [0.0, -span],
+            tile_scale_y: 1.0,
+            brightness: 1.0,
+            light_angle: 0.0,
+            visible: true,
+            fov_deg: 64.0,
+        });
+        core.frame(&frame, 0.0, 0, 0, None);
 
         let (dw, dh) = core.deck_size;
         let (dw, dh) = (dw as usize, dh as usize);
@@ -2065,8 +2142,10 @@ mod tests {
         assert_eq!(rgba[o + 3], 255, "mesh coverage alpha should be 1");
 
         // invisible flag blanks the deck (previous content keeps its staging)
-        let mut hidden = params.clone();
-        hidden.decks[13] = 0.0;
+        let mut hidden = frame.clone();
+        if let DeckDraw::Flight(f) = &mut hidden.slots[0].draw {
+            f.visible = false;
+        }
         core.frame(&hidden, 0.0, 0, 0, None);
         let rgba = read_deck_upright(&core, 0);
         let o = (dh / 2 * dw + dw / 2) * 4;

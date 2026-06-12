@@ -24,7 +24,7 @@ pub fn run() {
             ollama::ollama_install,
             ollama::ollama_start,
             render::engine::render_start,
-            render::engine::render_params,
+            render::engine::render_state,
             render::engine::render_stage_shader,
             render::engine::render_stage_sprite,
             render::engine::render_stage_model,

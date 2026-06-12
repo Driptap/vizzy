@@ -27,7 +27,11 @@ pub struct AudioDevice {
     pub label: String,
 }
 
-/// Raw band averages 0..1 — the TS side applies the 1.4 gain and per-frame lerp.
+/// Raw band averages 0..1 (low, mid, high, level) shared with the render
+/// thread, which applies the 1.4 gain and per-frame 0.15 lerp itself.
+pub type RawLevels = Arc<Mutex<[f32; 4]>>;
+
+/// Raw band averages 0..1 — emitted to the webview for the UI meters.
 #[derive(serde::Serialize, Clone)]
 struct AudioLevels {
     low: f32,
@@ -78,9 +82,17 @@ struct Capture {
 #[derive(Default)]
 pub struct AudioState {
     capture: Mutex<Option<Capture>>,
+    /// Latest raw band values, read in-process by the render thread.
+    raw: RawLevels,
 }
 
 impl AudioState {
+    /// Handle for the render thread; zeroed whenever capture stops, so deck
+    /// audio reactivity decays to silence through the render-side lerp.
+    pub fn raw_levels(&self) -> RawLevels {
+        Arc::clone(&self.raw)
+    }
+
     pub fn stop(&self) {
         let capture = lock_ignore_poison(&self.capture).take();
         if let Some(capture) = capture {
@@ -89,6 +101,7 @@ impl AudioState {
             let _ = capture.stream_thread.join();
             let _ = capture.analysis_thread.join();
         }
+        *lock_ignore_poison(&self.raw) = [0.0; 4];
     }
 }
 
@@ -144,7 +157,8 @@ pub fn audio_start(
     let analysis_thread = {
         let ring = Arc::clone(&ring);
         let running = Arc::clone(&running);
-        std::thread::spawn(move || run_analysis_loop(app, ring, running, sample_rate))
+        let raw = state.raw_levels();
+        std::thread::spawn(move || run_analysis_loop(app, ring, running, raw, sample_rate))
     };
 
     *lock_ignore_poison(&state.capture) = Some(Capture {
@@ -270,6 +284,7 @@ fn run_analysis_loop(
     app: tauri::AppHandle,
     ring: Arc<Mutex<Ring>>,
     running: Arc<AtomicBool>,
+    raw: RawLevels,
     sample_rate: u32,
 ) {
     let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
@@ -296,6 +311,8 @@ fn run_analysis_loop(
             high: band_average(&bins, sample_rate, BAND_HIGH.0, BAND_HIGH.1),
             level: band_average(&bins, sample_rate, BAND_LEVEL.0, BAND_LEVEL.1),
         };
+        // render thread reads in-process; the event only feeds the UI meters
+        *lock_ignore_poison(&raw) = [payload.low, payload.mid, payload.high, payload.level];
         let _ = app.emit("vizzy://audio-levels", payload);
     }
 }

@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use super::math3d::{self, Mat4};
-use super::params::{FlightExt, ModelExt};
+use super::params::{FlightDraw, ModelDraw};
 
 /// THREE's LANDSCAPE_WIDTH: imported landscape meshes get their widest
 /// horizontal axis scaled to this.
@@ -512,7 +512,7 @@ fn pack_mesh_uniform(
 
 /// Per-frame uniform for a model deck: fixed camera (45° fov, eye (0,0,4) →
 /// origin), model matrix T·R·S from the ext block, model rig, no fog.
-pub fn pack_model_uniform(ext: &ModelExt, aspect: f32) -> [f32; MESH_UNIFORM_FLOATS] {
+pub fn pack_model_uniform(ext: &ModelDraw, aspect: f32) -> [f32; MESH_UNIFORM_FLOATS] {
     let proj = math3d::perspective(45f32.to_radians(), aspect, 0.1, 100.0);
     let view: Mat4 = {
         let mut v = math3d::IDENTITY;
@@ -531,7 +531,7 @@ pub fn pack_model_uniform(ext: &ModelExt, aspect: f32) -> [f32; MESH_UNIFORM_FLO
 /// staged state; the ext block carries the camera and the tile z/y-scale.
 /// Tile 1 is the z-mirrored copy (negative z scale, seam-to-seam).
 pub fn pack_flight_uniform(
-    ext: &FlightExt,
+    ext: &FlightDraw,
     tile: usize,
     base_scale: f32,
     span: f32,
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn mesh_uniform_packs_fog_and_lights_at_wgsl_offsets() {
-        let ext = FlightExt {
+        let ext = FlightDraw {
             cam: [0.0, 1.0, 2.0],
             quat: [0.0, 0.0, 0.0, 1.0],
             tile_z: [0.0, -9.0],
@@ -699,7 +699,7 @@ mod tests {
         assert!(close(u[16], 0.9) && close(u[16 + 5], 1.0) && close(u[16 + 10], -0.9));
         assert!(close(u[16 + 12], 0.0) && close(u[16 + 13], -1.0) && close(u[16 + 14], -11.0));
 
-        let m = ModelExt {
+        let m = ModelDraw {
             pos: [0.0, 0.0, 0.0],
             quat: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0, 1.0, 1.0],

@@ -147,6 +147,72 @@ pub fn normalize3(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
+pub fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// (x, y, z, w) quaternion from intrinsic XYZ Euler angles — THREE's default
+/// `Object3D.rotation` order, matching `Quaternion.setFromEuler('XYZ')`.
+pub fn quat_from_euler_xyz(x: f32, y: f32, z: f32) -> [f32; 4] {
+    let (s1, c1) = (x * 0.5).sin_cos();
+    let (s2, c2) = (y * 0.5).sin_cos();
+    let (s3, c3) = (z * 0.5).sin_cos();
+    [
+        s1 * c2 * c3 + c1 * s2 * s3,
+        c1 * s2 * c3 - s1 * c2 * s3,
+        c1 * c2 * s3 + s1 * s2 * c3,
+        c1 * c2 * c3 - s1 * s2 * s3,
+    ]
+}
+
+/// XYZ Euler angles from a pure-rotation 3x3 (columns are basis vectors;
+/// r[col][row]) — THREE's `Euler.setFromRotationMatrix(m, 'XYZ')`.
+pub fn euler_xyz_from_mat3(r: &[[f32; 3]; 3]) -> [f32; 3] {
+    let m13 = r[2][0];
+    let y = m13.clamp(-1.0, 1.0).asin();
+    if m13.abs() < 0.999_999_9 {
+        let x = (-r[2][1]).atan2(r[2][2]);
+        let z = (-r[1][0]).atan2(r[0][0]);
+        [x, y, z]
+    } else {
+        let x = r[1][2].atan2(r[1][1]);
+        [x, y, 0.0]
+    }
+}
+
+/// Orientation of an object at `eye` looking at `target` with up = +y, as
+/// rotation-matrix columns — THREE's `Matrix4.lookAt` (camera convention:
+/// local -z points at the target).
+pub fn look_at_mat3(eye: [f32; 3], target: [f32; 3]) -> [[f32; 3]; 3] {
+    let up = [0.0, 1.0, 0.0];
+    let mut z = [eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]];
+    if z[0] * z[0] + z[1] * z[1] + z[2] * z[2] == 0.0 {
+        z[2] = 1.0;
+    }
+    let mut z = normalize3(z);
+    let mut x = cross3(up, z);
+    if x[0] * x[0] + x[1] * x[1] + x[2] * x[2] == 0.0 {
+        // z parallel to up: nudge like THREE (|up.z| != 1 here, so z.z moves)
+        z[2] += 0.0001;
+        z = normalize3(z);
+        x = cross3(up, z);
+    }
+    let x = normalize3(x);
+    let y = cross3(z, x);
+    [x, y, z]
+}
+
+/// The flight-camera orientation: lookAt (up +y), then the SKW roll ADDED to
+/// the XYZ euler z — exactly `camera.lookAt(...); camera.rotation.z += roll`.
+pub fn look_at_quat_with_roll(eye: [f32; 3], target: [f32; 3], roll: f32) -> [f32; 4] {
+    let e = euler_xyz_from_mat3(&look_at_mat3(eye, target));
+    quat_from_euler_xyz(e[0], e[1], e[2] + roll)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +264,62 @@ mod tests {
         assert!(close3(
             transform_point(&v, [-1.0, 0.0, 0.0]),
             [0.0, 0.0, -1.0]
+        ));
+    }
+
+    fn close4(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    #[test]
+    fn look_at_from_plus_z_is_identity_and_roll_is_local_z() {
+        // Camera at +z looking at the origin: identity-ish orientation.
+        let q = look_at_quat_with_roll([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], 0.0);
+        assert!(close4(q, [0.0, 0.0, 0.0, 1.0]));
+        // Roll changes ONLY the local z component.
+        let roll = 0.7f32;
+        let q = look_at_quat_with_roll([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], roll);
+        assert!(close4(
+            q,
+            [0.0, 0.0, (roll / 2.0).sin(), (roll / 2.0).cos()]
+        ));
+    }
+
+    #[test]
+    fn look_at_orients_minus_z_toward_the_target() {
+        // The flight camera: above the ground, looking down-forward.
+        let eye = [0.0, 2.0, 4.05];
+        let target = [0.0, 0.5, -6.0];
+        let r = look_at_mat3(eye, target);
+        // column 2 is local +z = normalize(eye - target)
+        let fwd = normalize3([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+        assert!(close3(r[2], [-fwd[0], -fwd[1], -fwd[2]]));
+        // round-trips through XYZ euler
+        let e = euler_xyz_from_mat3(&r);
+        let q = quat_from_euler_xyz(e[0], e[1], e[2]);
+        let r2 = quat_to_mat3(q);
+        for c in 0..3 {
+            assert!(close3(r[c], r2[c]));
+        }
+        // degenerate eye == target does not NaN
+        let q = look_at_quat_with_roll([1.0, 1.0, 1.0], [1.0, 1.0, 1.0], 0.0);
+        assert!(q.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn quat_from_euler_matches_single_axis_rotations() {
+        let h = 0.6f32 / 2.0;
+        assert!(close4(
+            quat_from_euler_xyz(0.6, 0.0, 0.0),
+            [h.sin(), 0.0, 0.0, h.cos()]
+        ));
+        assert!(close4(
+            quat_from_euler_xyz(0.0, 0.6, 0.0),
+            [0.0, h.sin(), 0.0, h.cos()]
+        ));
+        assert!(close4(
+            quat_from_euler_xyz(0.0, 0.0, 0.6),
+            [0.0, 0.0, h.sin(), h.cos()]
         ));
     }
 
