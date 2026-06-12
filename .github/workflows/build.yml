@@ -34,6 +34,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm test
+
       - run: npm run dist -- --publish never
 
       - uses: actions/upload-artifact@v4

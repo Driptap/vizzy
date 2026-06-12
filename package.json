@@ -12,6 +12,8 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "model:pull": "ollama pull qwen2.5-coder",
     "dist": "vite build && electron-builder"
   },
@@ -28,15 +30,22 @@
       "package.json"
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.music",
       "identity": null
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "AudioVideo"
     }
   },
@@ -47,13 +56,18 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.0",
     "cross-env": "^7.0.3",
     "electron": "^38.0.0",
     "electron-builder": "^26.15.2",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.0",
     "vite": "^7.1.0",
+    "vitest": "^4.1.8",
     "wait-on": "^8.0.1"
   }
 }
