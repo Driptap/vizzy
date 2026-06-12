@@ -1,0 +1,30 @@
+[package]
+name = "vizzy"
+version = "0.1.0"
+description = "Vizzy — live VJ tool: LLM-generated shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled"
+authors = ["Driptap"]
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "vizzy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cpal = "0.16"
+rustfft = "6"
+midir = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+
+[profile.release]
+strip = true
+lto = true

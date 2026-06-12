@@ -44,6 +44,20 @@ npm run dev          # vite dev server + electron, hot reload
 npm start            # production build + electron
 ```
 
+### Native shell (Tauri — migration in progress)
+
+The app is migrating to a Tauri 2 shell with a native Rust core (audio
+analysis, MIDI, managed Ollama runtime) per `NATIVE_MIGRATION_PLAN.md`.
+Requires a [Rust toolchain](https://rustup.rs).
+
+```bash
+npm run dev:tauri    # vite dev server + tauri shell, hot reload
+npm run dist:tauri   # native release bundle (dmg / nsis / AppImage + deb)
+```
+
+Known gaps vs the Electron build until the native renderer lands (Phase 2):
+no master-output pop-out window.
+
 ## Usage
 
 1. **Audio** — pick an input device in the top bar and hit *Enable Audio*
