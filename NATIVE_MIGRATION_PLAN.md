@@ -1,6 +1,7 @@
 # Vizzy Native Engine Migration Plan
 
-> **Status (2026-06-12):** Phases 0–2 implemented.
+> **Status (2026-06-12):** Phases 0–5 implemented; the migration's core is
+> complete.
 > Phase 0/1 — Tauri 2 shell (`src-tauri/`), native audio (cpal + rustfft),
 > native MIDI (midir), Ollama runtime manager in Rust, `src/platform/` host
 > abstraction, CI + build/release workflows. Electron deleted (no backward
@@ -22,9 +23,19 @@
 > Rust every frame on the render clock (a hidden webview can no longer freeze
 > the master output). three.js is removed; the webview neither evaluates nor
 > renders.
-> Pending from the Phase 0 spike: LLM-generation half (needs a local Ollama +
-> model; the ingestion half is proven). In progress: Phase 5 (Syphon out;
-> Spout deferred — no Windows machine to validate against).
+> Phase 5 — the master composite publishes over Syphon ("Vizzy Master",
+> zero-copy MTLTexture via a vendored Syphon.framework), toggled from the
+> TopBar. Spout is deferred until a Windows machine can validate it; NDI
+> remains optional/unscoped.
+> Phase 6 items already absorbed along the way: vsync pacing on the master
+> surface, panic-isolated staging (a bad shader or asset never kills the
+> loop), webview-independent rendering. Remaining hardening when real-world
+> use demands it: engine-stats overlay, beat-to-photon measurement, monitor
+> stream bandwidth (base64 JPEG events → raw channels).
+> Deferred validations needing hardware/services this machine lacks: a Syphon
+> client receiving "Vizzy Master" (Resolume/OBS), real MIDI hardware, the
+> LLM-generation half of the Phase 0 spike (local Ollama + model), and the
+> Windows/Linux CI legs of the new native loaders.
 
 Migrate Vizzy from Electron + Three.js to a **hybrid architecture**: the React UI stays
 web-based, while rendering, audio analysis, MIDI, and OS integration move into a native
