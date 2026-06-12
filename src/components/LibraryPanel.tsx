@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { getPlatform } from '../platform';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
 import type {
   DeckEntry,
   LibraryEntry,
@@ -29,8 +31,6 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'sprites', label: 'IMG' },
 ];
 
-const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
-const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
 // tabs whose content comes from files on disk (open button + drag-drop)
 const FILE_TABS: Partial<Record<TabId, { extensions: string[]; buttonLabel: string }>> = {
@@ -48,10 +48,9 @@ interface LibraryPanelProps {
   sceneLetter: string;
   onSaveDeck: () => void | Promise<void>;
   onAssignDeck: (entry: DeckEntry, scene: number) => void;
-  onAddModels: (files: File[]) => void;
+  onAddPaths: (paths: string[]) => void;
   onAssignModel: (entry: ModelEntry, channel: number) => void;
   onAssignLandscape: (entry: ModelEntry, channel: number) => void;
-  onAddSprites: (files: File[]) => void;
   onAssignSprite: (entry: SpriteEntry, channel: number) => void;
   onAssignScene: (entry: SceneEntry, channel: number) => void;
   onDelete: (entry: LibraryEntry) => void;
@@ -69,10 +68,9 @@ export function LibraryPanel({
   sceneLetter,
   onSaveDeck,
   onAssignDeck,
-  onAddModels,
+  onAddPaths,
   onAssignModel,
   onAssignLandscape,
-  onAddSprites,
   onAssignSprite,
   onAssignScene,
   onDelete,
@@ -84,20 +82,7 @@ export function LibraryPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [justSaved, setJustSaved] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const handleDroppedFiles = (fileList: FileList | null) => {
-    const fileTab = FILE_TABS[tab];
-    if (!fileTab || !fileList) return;
-    const files = Array.from(fileList).filter((file) =>
-      fileTab.extensions.some((ext) => file.name.toLowerCase().endsWith(ext)),
-    );
-    if (!files.length) return;
-    if (tab === 'models') onAddModels(files);
-    else onAddSprites(files);
-  };
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -174,23 +159,15 @@ export function LibraryPanel({
           <>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              title={`Add files (${fileTab.extensions.join(', ')}) — or drag them into the list below`}
+              onClick={async () => {
+                const paths = await getPlatform().pickFiles(fileTab.extensions);
+                if (paths?.length) onAddPaths(paths);
+              }}
+              title={`Add files (${fileTab.extensions.join(', ')}) — or drag them into the window`}
               className="mx-2 mt-2 rounded border border-neutral-700 py-1.5 text-[10px] font-bold tracking-wider text-neutral-300 transition-colors hover:border-cyan-500 hover:text-cyan-300"
             >
               {fileTab.buttonLabel}
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept={fileTab.extensions.join(',')}
-              className="hidden"
-              onChange={(e) => {
-                handleDroppedFiles(e.target.files);
-                e.target.value = '';
-              }}
-            />
           </>
         )}
 
@@ -209,23 +186,7 @@ export function LibraryPanel({
           </button>
         )}
 
-        <div
-          className={`min-h-0 flex-1 space-y-2 overflow-y-auto p-2 ${
-            dragOver ? 'rounded ring-2 ring-inset ring-cyan-500/70' : ''
-          }`}
-          onDragOver={(e) => {
-            if (!fileTab) return;
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            if (!fileTab) return;
-            e.preventDefault();
-            setDragOver(false);
-            handleDroppedFiles(e.dataTransfer.files);
-          }}
-        >
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
           {items.length === 0 && (
             <p className="px-2 py-4 text-center text-[10px] leading-relaxed text-neutral-600">
               {tab === 'shaders' &&
@@ -235,7 +196,7 @@ export function LibraryPanel({
               {tab === 'decks' &&
                 'No deck presets yet — build a scene, then hit SAVE DECK to capture all 4 channels.'}
               {tab === 'models' &&
-                'No models yet — drop .glb / .obj / .stl / .fbx files here, or use OPEN MODEL.'}
+                'No models yet — drop .glb / .obj / .stl files here, or use OPEN MODEL.'}
               {tab === 'sprites' &&
                 'No sprites yet — drop .png / .jpg / .webp / .gif files here, or use OPEN IMAGE.'}
             </p>

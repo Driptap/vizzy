@@ -2,6 +2,7 @@
 // JSON spec (kind + surface expression + palette) instead of GLSL; the
 // expression is compiled by the lib/expr sandbox and meshed by sceneGenerator.
 import { compileExpression } from '../lib/expr';
+import { extractJson } from '../lib/llmJson';
 import { surfaceVarsFor } from '../lib/sceneGenerator';
 import type { SceneSpec } from '../types';
 
@@ -23,29 +24,6 @@ palette: [base colour, peak/glow colour, fog colour]. Bold, saturated, high cont
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const DEFAULT_PALETTE: SceneSpec['palette'] = ['#ff71ce', '#01cdfe', '#1a0533'];
-
-/** Pull the first balanced {...} block out of prose/fenced model output. */
-function extractJson(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inString) {
-      if (ch === '\\') i += 1;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') {
-      inString = true;
-    } else if (ch === '{') {
-      depth += 1;
-    } else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
 
 export type SceneParseResult = { spec: SceneSpec; error?: undefined } | { spec?: undefined; error: string };
 

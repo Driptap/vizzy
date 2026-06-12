@@ -1,10 +1,9 @@
-import { selectRecipe } from './recipes';
 import type { DeckStatus } from '../types';
 
 export const DEFAULT_MODEL = 'qwen2.5-coder';
 
 // A user-run Ollama on the default port wins; the app-managed one (spawned
-// by electron/ollama-manager.cjs) listens one port up.
+// by src-tauri/src/ollama.rs) listens one port up.
 export const DEFAULT_BASE = 'http://127.0.0.1:11434';
 export const MANAGED_BASE = 'http://127.0.0.1:11435';
 
@@ -96,32 +95,6 @@ export async function pullModel(
   }
 }
 
-export const SYSTEM_PROMPT = `You are an expert GLSL shader programmer writing code for a live VJ performance.
-Write ONLY valid GLSL fragment shader code. Do not include markdown or explanations.
-You must strictly use the following uniforms which are already provided by the engine:
-uniform float u_time;       // Time in seconds
-uniform vec2 u_resolution;  // Screen resolution in pixels
-uniform float u_audio_low;  // Bass frequency amplitude (0.0 to 1.0)
-uniform float u_audio_mid;  // Midrange frequency amplitude (0.0 to 1.0)
-uniform float u_audio_high; // Treble frequency amplitude (0.0 to 1.0)
-uniform float u_audio_level;// Overall volume amplitude (0.0 to 1.0)
-
-Additional hard rules:
-- Do NOT redeclare the uniforms above, and do not add precision or #version directives.
-- A varying vec2 vUv (0.0 to 1.0 across the screen) is available.
-- Write output to gl_FragColor.
-- Put brightness and shape into RGB and set gl_FragColor.a to 1.0; alpha is
-  treated as a brightness multiplier by the mixer, not as transparency over
-  other layers.
-- There are NO texture samplers and no previous-frame buffer — everything must
-  be procedural. Loops must have constant bounds.
-- This is GLSL ES 1.00: every float literal needs a decimal point (1.0, not 1);
-  function arguments must be floats (pow(x, 2.0), not pow(x, 2)); convert int
-  loop counters with float(i) before using them in float math.
-- Do NOT use Shadertoy conventions: no mainImage, iTime, iResolution, iChannel.
-  Use void main(), u_time and u_resolution.
-- You may define helper functions, #defines and consts above void main().`;
-
 const REQUEST_TIMEOUT_MS = 120000;
 
 /** The failed attempt resent to the model for a repair pass. */
@@ -141,8 +114,10 @@ interface GenerationJob {
   prompt: string;
   onResponse: (raw: string) => void;
   repair: RepairContext | null;
-  /** overrides the GLSL system prompt (e.g. procedural scene generation) */
+  /** the mode's system prompt (patch or scene generation) */
   system: string | null;
+  /** JSON schema for Ollama structured outputs, or null for free text */
+  format: object | null;
 }
 
 interface GenerationQueueOptions {
@@ -180,10 +155,11 @@ export class GenerationQueue {
     onResponse: (raw: string) => void,
     repair: RepairContext | null = null,
     system: string | null = null,
+    format: object | null = null,
   ): void {
     // a re-click replaces that deck's pending job rather than stacking
     this.queue = this.queue.filter((job) => job.deckIndex !== deckIndex);
-    this.queue.push({ deckIndex, prompt, onResponse, repair, system });
+    this.queue.push({ deckIndex, prompt, onResponse, repair, system, format });
     this.onStatus(deckIndex, 'queued');
     this.pump();
   }
@@ -196,7 +172,7 @@ export class GenerationQueue {
 
     try {
       this.onStatus(job.deckIndex, 'generating');
-      const raw = await this.request(job.prompt, job.repair, job.system);
+      const raw = await this.request(job.prompt, job.repair, job.system, job.format);
       job.onResponse(raw);
     } catch (err) {
       console.error('[Vizzy] Generation failed:', err);
@@ -210,24 +186,14 @@ export class GenerationQueue {
   async request(
     userPrompt: string,
     repair: RepairContext | null = null,
-    systemOverride: string | null = null,
+    system: string | null = null,
+    format: object | null = null,
   ): Promise<string> {
-    // Append at most ONE style recipe, and only when the prompt matches —
-    // keeps the local model's context small while raising genre quality.
-    // A system override (scene generation) replaces all of that wholesale.
-    const recipe = systemOverride ? null : selectRecipe(userPrompt);
-    if (recipe) console.log(`[Vizzy] Style recipe matched: ${recipe.title}`);
-    const system =
-      systemOverride ??
-      (recipe
-        ? `${SYSTEM_PROMPT}\n\n## Style guidance — ${recipe.title}\n${recipe.guidance}`
-        : SYSTEM_PROMPT);
-
-    let fullPrompt = `${system}\n\nUser request: ${userPrompt}`;
+    let fullPrompt = system ? `${system}\n\nUser request: ${userPrompt}` : userPrompt;
     if (repair) {
       fullPrompt +=
-        `\n\nYour previous shader for this request FAILED. Fix it and return the` +
-        ` corrected, complete fragment shader code only.\n\nPrevious code:\n${repair.code}` +
+        `\n\nYour previous response for this request FAILED. Fix it and return the` +
+        ` corrected, complete JSON only.\n\nPrevious response:\n${repair.code}` +
         `\n\nError:\n${repair.error}`;
     }
 
@@ -242,6 +208,9 @@ export class GenerationQueue {
           model: this.getModel(),
           prompt: fullPrompt,
           stream: false,
+          // Structured outputs: constrain decoding to the mode's schema so
+          // malformed JSON stops being a failure mode at the source.
+          ...(format ? { format } : {}),
         }),
       });
       if (!res.ok) {

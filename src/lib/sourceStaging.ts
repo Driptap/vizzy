@@ -1,15 +1,14 @@
 // One staging path for everything that can land on a deck slot, used by
-// library assignment, deck-preset loading and session restore alike.
-import { loadModelObject } from './modelLoader';
-import { loadSpriteTexture } from './spriteLoader';
-import { buildSceneObject } from './sceneGenerator';
+// library assignment, deck-preset loading and session restore alike. The
+// native core loads asset files itself — it gets paths, not parsed objects.
 import { getModelFilePath, getSpriteFilePath } from './shaderLibrary';
-import type { RenderEngine } from '../engine/RenderEngine';
+import type { NativeRenderEngine } from '../engine/NativeRenderEngine';
 import type {
   ChannelSource,
   DeckChannelConfig,
   LibraryEntry,
   ModelEntry,
+  PatchSpec,
   SceneEntry,
   SceneSpec,
   SpriteEntry,
@@ -17,33 +16,35 @@ import type {
   StageableSource,
 } from '../types';
 
+const failed = (result: StageResult | undefined): StageResult =>
+  result?.ok ? { ok: true } : { ok: false, error: result?.error || 'Content load failed' };
+
 /** Stage a resolved source onto an engine slot. Never throws. */
 export async function stageSource(
-  engine: RenderEngine,
+  engine: NativeRenderEngine,
   slot: number,
   source: StageableSource,
 ): Promise<StageResult> {
   try {
-    if (source.type === 'model' || source.type === 'landscape') {
-      const object = await loadModelObject(await getModelFilePath(source.entry));
-      if (source.type === 'landscape') {
-        await engine.stageLandscape(slot, object, source.entry.id);
-      } else {
-        await engine.stageModel(slot, object, source.entry.id);
-      }
-      return { ok: true };
+    if (source.type === 'model') {
+      return failed(
+        await engine.stageModelFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
+      );
     }
-    if (source.type === 'scene') {
-      await engine.stageScene(slot, buildSceneObject(source.spec), source.spec);
-      return { ok: true };
+    if (source.type === 'landscape') {
+      return failed(
+        await engine.stageLandscapeFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
+      );
     }
     if (source.type === 'sprite') {
-      const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(source.entry));
-      engine.stageSprite(slot, texture, aspect, source.entry.id);
-      return { ok: true };
+      return failed(
+        await engine.stageSpriteFromPath(slot, await getSpriteFilePath(source.entry), source.entry.id),
+      );
     }
-    const result = engine.stageShader(slot, source.code);
-    return result?.ok ? { ok: true } : { ok: false, error: result?.error || 'Compile failed' };
+    if (source.type === 'scene') {
+      return failed(await engine.stageSceneSpec(slot, source.spec));
+    }
+    return failed(await engine.stagePatch(slot, source.patch));
   } catch (err) {
     console.error(`[Vizzy] Staging ${source.type} failed:`, err);
     const fallback = source.type === 'sprite' ? 'Image load failed' : 'Content load failed';
@@ -69,7 +70,7 @@ export function resolveSourceRef(
     landscapeId?: string;
     sceneId?: string;
     type?: string;
-    code?: string | null;
+    patch?: PatchSpec;
     spec?: SceneSpec;
   };
   // procedural scenes: session sources carry the spec inline, deck presets
@@ -108,12 +109,12 @@ export function resolveSourceRef(
   }
   if (anyRef.shaderId) {
     const entry = byId.get(anyRef.shaderId);
-    return entry && 'code' in entry && entry.code
-      ? { source: { type: 'shader', code: entry.code } }
-      : { error: 'Saved shader is missing from the library' };
+    return entry && 'patch' in entry && entry.patch
+      ? { source: { type: 'shader', patch: entry.patch } }
+      : { error: 'Saved patch is missing from the library' };
   }
-  if (anyRef.type === 'shader' && anyRef.code) {
-    return { source: { type: 'shader', code: anyRef.code } };
+  if (anyRef.type === 'shader' && anyRef.patch) {
+    return { source: { type: 'shader', patch: anyRef.patch } };
   }
   return { error: 'Nothing to stage' };
 }

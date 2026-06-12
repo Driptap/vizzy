@@ -1,22 +1,8 @@
-import * as THREE from 'three';
-
-const fs = window.require('fs/promises');
-
-export const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+import { getPlatform } from '../platform';
 
 async function fileBitmap(filePath: string): Promise<ImageBitmap> {
-  const buf = await fs.readFile(filePath);
+  const buf = await getPlatform().fs.readBytes(filePath);
   return createImageBitmap(new Blob([buf as unknown as BlobPart]));
-}
-
-/** Image file -> texture for the sprite quad (alpha preserved). */
-export async function loadSpriteTexture(
-  filePath: string,
-): Promise<{ texture: THREE.Texture; aspect: number }> {
-  const bitmap = await fileBitmap(filePath);
-  const texture = new THREE.CanvasTexture(bitmap);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return { texture, aspect: bitmap.width / bitmap.height };
 }
 
 /** Downscaled library thumbnail (flattened onto black, like the renderer). */

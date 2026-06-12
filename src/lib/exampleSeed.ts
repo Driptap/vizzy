@@ -1,9 +1,9 @@
-// First-launch example content: two shaders, a canvas-drawn PNG sprite and a
+// First-launch example content: two patches, a canvas-drawn PNG sprite and a
 // procedurally generated STL torus, tied together in an "Example Deck"
 // preset. Everything is synthesized at runtime — no binary assets shipped.
 import { saveShader, saveDeck, saveAssetFromBuffer, deleteEntry } from './shaderLibrary';
 import { defaultChannelConfig, makeDefaultAut } from './channels';
-import type { DeckChannelConfig, DeckEntry, LibraryEntry } from '../types';
+import type { DeckChannelConfig, DeckEntry, LibraryEntry, PatchSpec } from '../types';
 
 export const EXAMPLE_DECK_NAME = 'Example Deck';
 const EXAMPLE_NAMES = new Set([
@@ -36,29 +36,27 @@ export async function dedupeExampleEntries(entries: LibraryEntry[]): Promise<Lib
   return entries.filter((entry) => !dupeIds.has(entry.id));
 }
 
-const PLASMA_BODY = `void main() {
-  vec2 p = (vUv - 0.5) * vec2(u_resolution.x / u_resolution.y, 1.0);
-  float t = u_time * 0.6;
-  float v = sin(p.x * 4.0 + t)
-          + sin(p.y * 3.0 - t * 1.3)
-          + sin((p.x + p.y) * 5.0 + t * 0.7)
-          + sin(length(p) * 8.0 - t * 2.0);
-  v = v * 0.25 + 0.5;
-  vec3 col = 0.5 + 0.5 * cos(6.2831 * (v + u_time * 0.05 + vec3(0.0, 0.33, 0.67)));
-  col *= 0.6 + 0.8 * u_audio_level;
-  col += vec3(u_audio_low, u_audio_mid, u_audio_high) * 0.25;
-  gl_FragColor = vec4(col, 1.0);
-}`;
+const PLASMA_PATCH: PatchSpec = {
+  generator: 'plasma',
+  params: { freq: 4 },
+  palette: { preset: 'rainbow' },
+  motion: { speed: 0.8 },
+  audio: [
+    { band: 'level', target: 'brightness', amount: 0.8 },
+    { band: 'low', target: 'scale', amount: 0.4 },
+  ],
+};
 
-const RINGS_BODY = `void main() {
-  vec2 p = (vUv - 0.5) * vec2(u_resolution.x / u_resolution.y, 1.0);
-  float r = length(p);
-  float rings = sin(r * 24.0 - u_time * 3.0 - u_audio_low * 6.0);
-  float m = smoothstep(0.2, 0.9, rings);
-  vec3 col = mix(vec3(0.02, 0.0, 0.05), vec3(0.1, 0.9, 1.0), m);
-  col *= smoothstep(1.1, 0.2, r) * (0.5 + 0.8 * u_audio_level);
-  gl_FragColor = vec4(col, 1.0);
-}`;
+const RINGS_PATCH: PatchSpec = {
+  generator: 'interference',
+  params: { sources: 2, freq: 24 },
+  palette: { preset: 'ice' },
+  audio: [
+    { band: 'low', target: 'speed', amount: 0.8 },
+    { band: 'level', target: 'brightness', amount: 0.6 },
+  ],
+  post: { vignette: 0.4 },
+};
 
 function dataURLToBytes(dataURL: string): Uint8Array {
   const bin = atob(dataURL.split(',')[1]);
@@ -216,12 +214,12 @@ function makeTerrainSTL(W = 48, D = 36, segX = 56, segZ = 42): Uint8Array {
 export async function seedExampleLibrary(): Promise<{ deck: DeckEntry; entries: LibraryEntry[] }> {
   const plasma = await saveShader({
     name: 'Example · Plasma Flow',
-    code: PLASMA_BODY,
+    patch: PLASMA_PATCH,
     screenshot: gradientThumb('PLASMA', '#0ea5e9', '#d946ef'),
   });
   const rings = await saveShader({
     name: 'Example · Neon Rings',
-    code: RINGS_BODY,
+    patch: RINGS_PATCH,
     screenshot: gradientThumb('RINGS', '#0f172a', '#06b6d4'),
   });
   const starAsset = makeStarSprite();

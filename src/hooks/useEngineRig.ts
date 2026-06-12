@@ -1,10 +1,10 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { RenderEngine } from '../engine/RenderEngine';
-import { AudioEngine } from '../engine/AudioEngine';
+import { NativeRenderEngine } from '../engine/NativeRenderEngine';
+import { NativeAudioEngine } from '../engine/NativeAudioEngine';
 import { GenerationQueue, type DeckStatusCallback } from '../llm/ollama';
 import type { PerformanceState } from './usePerformanceState';
 
-export type EngineRef = RefObject<RenderEngine | null>;
+export type EngineRef = RefObject<NativeRenderEngine | null>;
 
 interface EngineRigOptions {
   sceneACanvasRef: RefObject<HTMLCanvasElement | null>;
@@ -14,9 +14,10 @@ interface EngineRigOptions {
   onDeckStatus: DeckStatusCallback;
 }
 
-// Owns the hardware-facing singletons: the GL render engine, the audio
-// analyser it samples, and the LLM generation queue. Created once on mount;
-// callbacks are routed through refs so the rig never needs re-creating.
+// Owns the hardware-facing singletons: the render-engine client, the native
+// audio engine (UI meters; the render core reads audio in-process), and the
+// LLM generation queue. Created once on mount; callbacks are routed through
+// refs so the rig never needs re-creating.
 export function useEngineRig({
   sceneACanvasRef,
   sceneBCanvasRef,
@@ -24,8 +25,8 @@ export function useEngineRig({
   getModel,
   onDeckStatus,
 }: EngineRigOptions) {
-  const engineRef = useRef<RenderEngine | null>(null);
-  const audioRef = useRef<AudioEngine | null>(null);
+  const engineRef = useRef<NativeRenderEngine | null>(null);
+  const audioRef = useRef<NativeAudioEngine | null>(null);
   const queueRef = useRef<GenerationQueue | null>(null);
 
   const getModelRef = useRef(getModel);
@@ -34,13 +35,12 @@ export function useEngineRig({
   onDeckStatusRef.current = onDeckStatus;
 
   useEffect(() => {
-    const audio = new AudioEngine();
+    const audio = new NativeAudioEngine();
     audioRef.current = audio;
 
-    const engine = new RenderEngine(
+    const engine = new NativeRenderEngine(
       { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
       previewRefs.current,
-      audio,
     );
     engineRef.current = engine;
 
@@ -59,7 +59,7 @@ export function useEngineRig({
   return { engineRef, audioRef, queueRef };
 }
 
-// Single sync point for the composite uniforms: a muted channel outputs 0
+// Single sync point for the engine state: a muted channel outputs 0
 // while its fader position is preserved for unmute.
 export function useEngineSync(
   engineRef: EngineRef,

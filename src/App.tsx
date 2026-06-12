@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry } from './types';
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
@@ -39,6 +39,34 @@ export default function App() {
 
   const audio = useAudioControls(audioRef);
   const master = useMasterWindow(engineRef);
+
+  // Syphon texture sharing lives in the render core; mirror its state here.
+  const [syphonOn, setSyphonOn] = useState(false);
+  useEffect(() => {
+    engineRef.current?.onTextureShare(setSyphonOn);
+  }, [engineRef]);
+  const handleToggleSyphon = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    void engine
+      .setTextureShare(!syphonOn)
+      .then(setSyphonOn)
+      .catch((err) => console.error('[Vizzy] Texture share failed:', err));
+  }, [engineRef, syphonOn]);
+
+  // Master glow (bloom) also lives in the render core; same mirror pattern.
+  const [glowOn, setGlowOn] = useState(false);
+  useEffect(() => {
+    engineRef.current?.onGlow(setGlowOn);
+  }, [engineRef]);
+  const handleToggleGlow = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    void engine
+      .setGlow(!glowOn)
+      .then(setGlowOn)
+      .catch((err) => console.error('[Vizzy] Glow toggle failed:', err));
+  }, [engineRef, glowOn]);
 
   const handleMidiControl = useCallback(
     (controlId: string, value: number) => {
@@ -107,6 +135,10 @@ export default function App() {
         onToggleLibrary={library.handleToggleLibrary}
         masterOpen={master.masterOpen}
         onToggleMaster={master.handleToggleMaster}
+        syphonOn={syphonOn}
+        onToggleSyphon={handleToggleSyphon}
+        glowOn={glowOn}
+        onToggleGlow={handleToggleGlow}
         audioActive={audio.audioActive}
         audioDevices={audio.audioDevices}
         selectedDevice={audio.selectedDevice}
@@ -137,10 +169,9 @@ export default function App() {
           sceneLetter={sceneLetter}
           onSaveDeck={library.handleSaveDeckScene}
           onAssignDeck={library.handleAssignDeck}
-          onAddModels={library.handleAddModels}
+          onAddPaths={library.handleAddPaths}
           onAssignModel={library.handleAssignModel}
           onAssignLandscape={library.handleAssignLandscape}
-          onAddSprites={library.handleAddSprites}
           onAssignSprite={library.handleAssignSprite}
           onAssignScene={library.handleAssignScene}
           onDelete={library.handleDeleteEntry}

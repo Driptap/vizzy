@@ -8,6 +8,10 @@ interface TopBarProps {
   onToggleLibrary: () => void;
   masterOpen: boolean;
   onToggleMaster: () => void;
+  syphonOn: boolean;
+  onToggleSyphon: () => void;
+  glowOn: boolean;
+  onToggleGlow: () => void;
   audioActive: boolean;
   audioDevices: MediaDeviceInfo[];
   selectedDevice: string;
@@ -32,6 +36,10 @@ export function TopBar({
   onToggleLibrary,
   masterOpen,
   onToggleMaster,
+  syphonOn,
+  onToggleSyphon,
+  glowOn,
+  onToggleGlow,
   audioActive,
   audioDevices,
   selectedDevice,
@@ -97,6 +105,39 @@ export function TopBar({
         }`}
       >
         {masterOpen ? '● Master Out' : 'Master Out'}
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleSyphon}
+        title="Share the master output with other VJ apps (Resolume, MadMapper, OBS) over Syphon — macOS only"
+        className={`whitespace-nowrap rounded px-3 py-1 text-xs font-semibold transition-colors ${
+          syphonOn
+            ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
+            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
+        }`}
+      >
+        {/* dot always occupies its slot so the button never resizes */}
+        <span aria-hidden className={`mr-1 ${syphonOn ? '' : 'opacity-0'}`}>
+          ●
+        </span>
+        Syphon
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleGlow}
+        title="Soft bloom on the master output — bright areas spill a tasteful stage glow"
+        className={`whitespace-nowrap rounded px-3 py-1 text-xs font-semibold transition-colors ${
+          glowOn
+            ? 'bg-violet-600 text-white hover:bg-violet-500'
+            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
+        }`}
+      >
+        <span aria-hidden className={`mr-1 ${glowOn ? '' : 'opacity-0'}`}>
+          ●
+        </span>
+        Glow
       </button>
 
       <div className="ml-4 flex items-center gap-2">

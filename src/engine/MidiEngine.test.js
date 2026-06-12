@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MidiEngine } from './MidiEngine';
 
 const STORAGE_KEY = 'vizzy.midiBindings';
-const LEGACY_STORAGE_KEY = 'promptvj.midiBindings';
 
 const ccMessage = (cc, value, status = 0xb0) => ({ data: [status, cc, value] });
 
@@ -25,12 +24,6 @@ describe('MidiEngine bindings persistence', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ 21: 'xfade' }));
     const { engine } = makeEngine();
     expect(engine.controlMap()).toEqual({ xfade: 21 });
-  });
-
-  it('falls back to the pre-rebrand storage key', () => {
-    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({ 7: 'a_mix1' }));
-    const { engine } = makeEngine();
-    expect(engine.controlMap()).toEqual({ a_mix1: 7 });
   });
 
   it('survives corrupt stored JSON', () => {

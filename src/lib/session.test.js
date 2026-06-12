@@ -3,21 +3,27 @@ import fsp from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { makeNodePlatform } from '../test/fakePlatform';
 
-// session.js resolves Electron + node modules through window.require at module
-// scope; route it to the real node modules and a fake ipcRenderer pointing at
-// a fresh temp dir, then import the module under test fresh each time.
+// session.ts reaches the host through the platform layer; back it with the
+// real fs against a fresh temp dir, then import the module under test fresh
+// each time so its memoized session path resets.
 let userDataDir;
+let plat;
+
+vi.mock('../platform', async () => {
+  const types = await vi.importActual('../platform/types');
+  return {
+    joinPath: types.joinPath,
+    extname: types.extname,
+    isTauri: () => false,
+    getPlatform: () => plat,
+  };
+});
 
 async function importSession() {
   userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'vizzy-session-'));
-  const modules = {
-    electron: { ipcRenderer: { invoke: vi.fn().mockResolvedValue(userDataDir) } },
-    'fs/promises': fsp,
-    fs: fsSync,
-    path,
-  };
-  window.require = (name) => modules[name];
+  plat = makeNodePlatform(userDataDir);
   vi.resetModules();
   return import('./session');
 }

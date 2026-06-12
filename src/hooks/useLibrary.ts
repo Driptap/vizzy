@@ -6,7 +6,6 @@ import {
   saveDeck,
   saveModel,
   saveSprite,
-  filePathOf,
   renameShader,
   updateEntry,
   deleteEntry,
@@ -14,6 +13,8 @@ import {
   writeSeededMarker,
 } from '../lib/shaderLibrary';
 import { makeSpriteThumbnail } from '../lib/spriteLoader';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
+import { getPlatform } from '../platform';
 import { stageSource, resolveSourceRef } from '../lib/sourceStaging';
 import {
   seedExampleLibrary,
@@ -107,7 +108,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
         let entry: LibraryEntry;
         if (source.type === 'shader') {
           entry = await saveShader({
-            code: engine.getShaderBody(slot),
+            patch: engine.getPatch(slot),
             screenshot: engine.getPreviewDataURL(channel),
           });
         } else if (source.type === 'scene') {
@@ -127,12 +128,10 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     [engineRef, cueScene, prompts],
   );
 
-  const handleAddModels = useCallback(async (files: File[]) => {
+  const addModelPaths = useCallback(async (items: Array<{ sourcePath: string; name: string }>) => {
     try {
       const added: LibraryEntry[] = [];
-      for (const file of files) {
-        const sourcePath = filePathOf(file);
-        const name = file.name.replace(/\.[^.]+$/, '');
+      for (const { sourcePath, name } of items) {
         // eslint-disable-next-line no-await-in-loop
         added.push(await saveModel({ sourcePath, name }));
       }
@@ -142,12 +141,10 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
-  const handleAddSprites = useCallback(async (files: File[]) => {
+  const addSpritePaths = useCallback(async (items: Array<{ sourcePath: string; name: string }>) => {
     try {
       const added: LibraryEntry[] = [];
-      for (const file of files) {
-        const sourcePath = filePathOf(file);
-        const name = file.name.replace(/\.[^.]+$/, '');
+      for (const { sourcePath, name } of items) {
         // eslint-disable-next-line no-await-in-loop
         const screenshot = await makeSpriteThumbnail(sourcePath);
         // eslint-disable-next-line no-await-in-loop
@@ -158,6 +155,26 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
       console.error('[Vizzy] Adding sprite failed:', err);
     }
   }, []);
+
+  /** Route absolute paths (native drops / native picker) by extension. */
+  const handleAddPaths = useCallback(
+    async (paths: string[]) => {
+      const item = (p: string) => ({
+        sourcePath: p,
+        name: (p.split(/[/\\]/).pop() ?? p).replace(/\.[^.]+$/, ''),
+      });
+      const matches = (p: string, exts: string[]) =>
+        exts.some((ext) => p.toLowerCase().endsWith(ext));
+      const models = paths.filter((p) => matches(p, MODEL_EXTENSIONS)).map(item);
+      const sprites = paths.filter((p) => matches(p, SPRITE_EXTENSIONS)).map(item);
+      if (models.length) await addModelPaths(models);
+      if (sprites.length) await addSpritePaths(sprites);
+    },
+    [addModelPaths, addSpritePaths],
+  );
+
+  // The webview swallows DOM drop events; file drops arrive as native paths.
+  useEffect(() => getPlatform().onFileDrop((paths) => void handleAddPaths(paths)), [handleAddPaths]);
 
   const handleAssignSprite = useCallback(
     (entry: SpriteEntry, channel: number) => stageOntoSlot(slotIndex(cueScene, channel), { type: 'sprite', entry }),
@@ -182,7 +199,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
 
   const handleAddToChannel = useCallback(
     (entry: ShaderEntry, channel: number) =>
-      stageOntoSlot(slotIndex(cueScene, channel), { type: 'shader', code: entry.code }),
+      stageOntoSlot(slotIndex(cueScene, channel), { type: 'shader', patch: entry.patch }),
     [stageOntoSlot, cueScene],
   );
 
@@ -249,13 +266,15 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           }
           channels.push({ sceneId: sceneEntry.id, ...config });
         } else {
+          const patchJson = JSON.stringify(source.patch);
           let shaderEntry =
-            library.find((e) => isShaderEntry(e) && e.code === source.code) ||
-            newShaders.find((e) => e.code === source.code);
+            library.find(
+              (e): e is ShaderEntry => isShaderEntry(e) && JSON.stringify(e.patch) === patchJson,
+            ) || newShaders.find((e) => JSON.stringify(e.patch) === patchJson);
           if (!shaderEntry) {
             // eslint-disable-next-line no-await-in-loop
             shaderEntry = await saveShader({
-              code: source.code ?? '',
+              patch: source.patch,
               screenshot: engine.getPreviewDataURL(ch),
             });
             newShaders.push(shaderEntry);
@@ -348,8 +367,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     libraryOpen,
     handleToggleLibrary,
     handleSaveDeck,
-    handleAddModels,
-    handleAddSprites,
+    handleAddPaths,
     handleAssignSprite,
     handleAssignModel,
     handleAssignLandscape,

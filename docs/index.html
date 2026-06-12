@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vizzy — a toy VJ instrument</title>
-<meta name="description" content="Vizzy is a toy VJ app: type a prompt, a local LLM writes a GLSL shader, you mix decks with MIDI while it all reacts to audio.">
+<meta name="description" content="Vizzy is a toy VJ app: type a prompt, a local LLM designs the visual, a native GPU engine renders it. Mix two scenes of decks with MIDI while everything reacts to audio.">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta property="og:title" content="Vizzy — a toy VJ instrument">
-<meta property="og:description" content="Prompts in, shaders out. LLM-generated GLSL, audio-reactive, MIDI-controlled. Free for macOS, Windows and Linux.">
+<meta property="og:description" content="Prompts in, visuals out. LLM-designed patches on a native GPU engine — audio-reactive, MIDI-controlled, Syphon out. Free for macOS, Windows and Linux.">
 <meta property="og:image" content="https://www.sinanguclu.co.uk/vizzy/og.png">
 <meta property="og:url" content="https://www.sinanguclu.co.uk/vizzy/">
 <meta property="og:type" content="website">
@@ -222,14 +222,14 @@
 
   <p class="tag">
     A <em>toy VJ instrument</em> that's fun to play with: type a prompt,
-    a local LLM writes a GLSL shader, and you ride the faders while
-    everything wobbles to the music.
+    a local LLM dreams up the visual, a native GPU engine renders it,
+    and you ride the faders while everything wobbles to the music.
   </p>
 
   <div class="how">
     <span><b>01</b> type a prompt</span>
-    <span><b>02</b> LLM dreams up a shader</span>
-    <span><b>03</b> mix decks · MIDI · audio-reactive</span>
+    <span><b>02</b> LLM designs a patch — tunnels · spectra · fractals · plasma</span>
+    <span><b>03</b> mix 2 scenes × 4 decks · MIDI · Syphon out</span>
   </div>
 
   <div class="downloads">
@@ -275,12 +275,13 @@
         <span class="why">Vizzy expects it on the default port, 11434.</span>
       </li>
       <li>
-        Pull a code-capable model — the default Vizzy asks for is
+        Pull a model — the default Vizzy asks for is
         <code>qwen2.5-coder</code> (~4.7 GB):
         <pre><code>ollama pull qwen2.5-coder</code></pre>
-        <span class="why">Any model that can write GLSL works — change the
-        model name in Vizzy's top bar. Bigger model = better shaders, slower
-        drops.</span>
+        <span class="why">The model fills in a small JSON patch (not raw
+        shader code), so even small models reliably produce working visuals —
+        change the model name in Vizzy's top bar. Bigger model = better taste,
+        slower drops.</span>
       </li>
       <li>
         Open Vizzy, type a prompt into a deck, hit <code>Generate</code>.
@@ -296,7 +297,8 @@
     Apple is just sulking about the £99. Drag Vizzy.app to Applications, then run
     <code>xattr -dr com.apple.quarantine /Applications/Vizzy.app</code> once and
     it opens forever after.
-    This very background is a GLSL shader — that's the kind of thing Vizzy makes all night.
+    This very background is a little plasma shader — Vizzy's native engine
+    makes this kind of thing all night, only faster and with more knobs.
   </p>
 </main>
 

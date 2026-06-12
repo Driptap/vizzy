@@ -4,87 +4,118 @@
 
 # Vizzy
 
-Local MVP desktop app for live VJing: write text prompts that a local LLM turns
-into GLSL fragment shaders, compiled on the fly across 4 decks, mixed with a
-MIDI controller, all reacting to live audio input.
+A desktop VJ instrument: type a prompt, a local LLM designs the visual, a
+native Rust/wgpu engine renders it. Two scenes × four decks, crossfaded,
+audio-reactive, MIDI-controlled, with Syphon output to other VJ software.
+
+Decks can run LLM-designed **patches** (composed from a library of classic
+visualizer building blocks — spectrum bars, tunnels, plasma, fractals,
+matrix rain…), **images**, **3D models** (glTF/OBJ/STL, spinning or flown
+over as landscapes) and **procedural fly-through scenes**.
 
 ## Prerequisites
 
-- Node.js 20+ (only if running from source — packaged builds are on the
-  [latest release](https://github.com/Driptap/vizzy/releases/latest))
-- [Ollama](https://ollama.com) running locally with a code-capable model
-  (see below)
+- Nothing, if you grab a packaged build from the
+  [latest release](https://github.com/Driptap/vizzy/releases/latest)
+- From source: Node.js 20+ and a [Rust toolchain](https://rustup.rs)
+- [Ollama](https://ollama.com) for generation (Vizzy offers to install and
+  manage it for you on first run)
 
 ## Installing Ollama
 
-Vizzy generates shaders with a local LLM via Ollama — nothing leaves your
-machine, no API keys needed.
+Vizzy generates visuals with a local LLM via Ollama — nothing leaves your
+machine, no API keys needed. The easy way: open Vizzy and follow the setup
+screen. By hand:
 
 1. **Install** the runtime:
    - **macOS** — download from [ollama.com/download](https://ollama.com/download),
-     or `brew install --cask ollama-app` (the GUI app cask, not the `ollama`
-     formula — the app bundles and manages the server for you)
+     or `brew install --cask ollama-app`
    - **Windows** — download and run the installer from
      [ollama.com/download](https://ollama.com/download)
    - **Linux** — `curl -fsSL https://ollama.com/install.sh | sh`
-2. **Run it.** The macOS/Windows desktop app starts the server automatically
-   (llama icon in the menu bar / tray). On Linux or with a CLI-only install,
-   run `ollama serve`. Vizzy expects the default port, 11434.
-3. **Pull a model.** The default Vizzy requests is `qwen2.5-coder` (~4.7 GB):
+2. **Run it.** The macOS/Windows desktop app starts the server automatically;
+   on Linux or with a CLI-only install, run `ollama serve`. Vizzy expects the
+   default port, 11434 (or manages its own instance one port up).
+3. **Pull a model.** The default is `qwen2.5-coder` (~4.7 GB):
    `ollama pull qwen2.5-coder` (or `npm run model:pull` from a source
-   checkout). Any model that can write GLSL works — the model name is
-   editable in Vizzy's top bar.
+   checkout). Generation asks the model for a small JSON spec under a
+   constrained-decoding schema, so even small models produce working visuals —
+   the model name is editable in Vizzy's top bar.
 
 ## Run
+
+The app is a Tauri 2 shell: the React UI lives in the system webview, and
+everything real-time is native Rust — the wgpu render engine, audio analysis,
+MIDI input and the managed Ollama runtime.
 
 ```bash
 npm install
 npm run model:pull   # download the default Ollama model (qwen2.5-coder)
-npm run dev          # vite dev server + electron, hot reload
-npm start            # production build + electron
+npm run dev          # vite dev server + tauri shell, hot reload
+npm run dist         # native release bundle (dmg / nsis / AppImage + deb)
 ```
+
+Rust tests run from `src-tauri/`: `cargo test` (plus
+`cargo test -- --ignored` for the GPU suite on a machine with a GPU).
 
 ## Usage
 
-1. **Audio** — pick an input device in the top bar and hit *Enable Audio*
-   (device labels appear after the first permission grant). The four bands
-   (`u_audio_low/mid/high/level`) are lerp-smoothed and fed to every deck
-   shader each frame.
-2. **Generate** — type a prompt in a deck and hit *Generate*. Requests are
-   queued sequentially so multiple decks don't fight over the LLM GPU. Status
-   flow: Queued → Generating → Compiling → Active (or Compile Failed — the
-   previous visual keeps running).
-3. **Mix** — the 4 vertical faders set each deck's weight in the additive
-   master composite.
-4. **MIDI** — toggle *MIDI Learn*, click a fader, move a physical control:
-   that CC is bound (persisted in localStorage). Toggle Learn off to perform.
-5. **Library** — the *Library* button slides in a left panel that can stay
-   open. Each deck has a small *SAVE* button that captures the running shader
-   (with a screenshot of the live preview) into the library instantly and
-   namelessly — no typing mid-performance; rename later. Right-click a saved
-   shader for *Add to channel 1–4*, *Rename* (inline, in place of the label)
-   and *Delete*. Shaders are stored as JSON files in
-   `<userData>/shaders/` (on macOS: `~/Library/Application Support/vizzy/shaders/`).
+1. **Audio** — pick an input device in the top bar and hit *Enable Audio*.
+   Four bands (low/mid/high/level) are computed natively (cpal + FFT) and fed
+   to every deck each frame.
+2. **Generate** — type a prompt in a deck and hit *Generate*. The LLM picks a
+   generator from the patch catalog, a palette, warps and audio routing;
+   the engine composes it into a shader. Requests queue sequentially so decks
+   don't fight over the LLM. *SCENE* mode generates a 3D fly-through instead.
+3. **Mix** — four faders per scene feed the additive composite; the central
+   crossfader blends scene A and B on the master output. Each deck has
+   layers, FX (tilt/contrast/hue/sat), per-control automation (AUT), and a
+   beat-locked loop sequencer driven by the global BPM.
+4. **Master Out** — opens the composite in its own window; double-click it
+   for fullscreen on a projector. *Glow* adds a bloom pass on the master;
+   *Syphon* (macOS) publishes it to Resolume/MadMapper/OBS.
+5. **MIDI** — toggle *MIDI Learn*, click a fader, move a physical control:
+   bound. Toggle Learn off to perform.
+6. **Library** — saves patches, deck presets (a whole scene's 4 channels),
+   images, 3D models and generated scenes. Drag files in, right-click entries
+   to assign; per-deck *SAVE* captures the running visual with a screenshot.
 
 ## Architecture
 
-- `src/engine/RenderEngine.js` — three.js: 4 off-screen render targets, each a
-  fullscreen quad with an active ShaderMaterial; staged LLM shaders are
-  validated (raw GL precompile + hidden three.js render) before being swapped
-  in. A master composite shader mixes the 4 targets to the main canvas.
-  Deck previews are read back at 160×90, round-robin one deck per frame.
-- `src/engine/AudioEngine.js` — getUserMedia → AnalyserNode (fftSize 512),
-  band averages lerped at 0.15/frame.
-- `src/engine/MidiEngine.js` — Web MIDI CC listener with learn-mode binding.
-- `src/llm/ollama.js` — sequential generation queue + system prompt wrapper.
-- `src/llm/parser.js` — extracts the GLSL body (helpers + `void main()`)
-  from raw LLM output, stripping markdown/prose and reserved redeclarations.
+- `src-tauri/src/render/engine.rs` — the wgpu render thread: 8 offscreen deck
+  targets, the WGSL compositor (scene/preview/master passes), a persistent
+  offscreen master target, the glow chain, JPEG monitor readbacks, and the
+  master window blit. Self-driving: the render clock keeps running even when
+  the UI webview is hidden.
+- `src-tauri/src/render/patch.rs` — the patch composer. An LLM-emitted JSON
+  spec (generator + params + palette + warps + audio routing + post) is
+  assembled from hand-written, tested WGSL blocks: 27 generators, 11 warps,
+  cosine palettes, and feedback trails via per-deck history textures.
+  A spec that parses always renders — there is no generated shader code.
+- `src-tauri/src/render/content.rs` / `content.wgsl` — sprite and lit mesh
+  passes: glTF/OBJ/STL loading with base-color textures and mipmaps,
+  sRGB-correct Blinn-Phong lighting, 4× MSAA, landscape/scene flight rigs.
+- `src-tauri/src/render/evaluate.rs` — per-frame evaluation of loops,
+  automation, and audio routing on the render thread's own clock.
+- `src-tauri/src/render/syphon.rs` — SyphonMetalServer via objc2 (macOS).
+- `src-tauri/src/audio.rs` — cpal input + rustfft band analysis, shared
+  in-process with the render thread.
+- `src-tauri/src/midi.rs` — midir input stream; the CC learn/binding logic
+  stays in `src/engine/MidiEngine.ts`.
+- `src/engine/NativeRenderEngine.ts` — thin state mirror: knob changes are
+  coalesced into one state push per frame; staging entry points; monitor
+  frame painter.
+- `src/lib/patches.ts` + `src/llm/patches.ts` — the patch catalog, the
+  response validator, and the LLM contract (system prompt + JSON schema for
+  Ollama structured outputs).
+- `src/lib/sceneGenerator.ts` + `src/lib/expr.ts` — procedural scenes: a
+  sandboxed math-expression compiler meshes LLM-emitted surface functions.
 
 ## Troubleshooting
 
-- **CORS errors against Ollama** — recent Ollama versions allow
-  `http://localhost:*` and `file://` origins by default; if yours doesn't,
-  start it with `OLLAMA_ORIGINS='*' ollama serve`.
-- **"Ollama unreachable"** — check `ollama serve` is running on port 11434.
+- **"Ollama unreachable"** — check `ollama serve` is running on port 11434,
+  or let Vizzy's setup screen manage its own instance.
+- **macOS says the app "is damaged"** — builds are unsigned; run
+  `xattr -dr com.apple.quarantine /Applications/Vizzy.app` once.
 - **Black master output** — deck 1 starts at full opacity, others at 0;
-  check the mixer faders.
+  check the mixer faders and the crossfader position.

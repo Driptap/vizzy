@@ -1,4 +1,5 @@
 import { getStored, setStored } from '../lib/storage';
+import { isTauri } from '../platform';
 
 const STORAGE_KEY = 'midiBindings';
 
@@ -13,12 +14,25 @@ export interface MidiHandlers {
 /** CC number (as a string key) -> bound control id */
 type Bindings = Record<string, string>;
 
+interface NativeMidiMessage {
+  status: number;
+  data1: number;
+  data2: number;
+}
+
+/**
+ * MIDI learn/binding engine. The learn and routing logic is host-agnostic;
+ * only the transport differs: the Rust core's midir event stream under
+ * Tauri (whose webviews lack Web MIDI), Web MIDI in a plain browser tab.
+ */
 export class MidiEngine {
   onControlValue?: MidiHandlers['onControlValue'];
   onLearned?: MidiHandlers['onLearned'];
   access: MIDIAccess | null = null;
   armedControl: string | null = null;
   bindings: Bindings;
+  private nativeInputs = 0;
+  private nativeUnlistens: Array<() => void> = [];
 
   constructor({ onControlValue, onLearned }: MidiHandlers) {
     this.onControlValue = onControlValue;
@@ -31,11 +45,28 @@ export class MidiEngine {
     this.handleMessage = this.handleMessage.bind(this);
   }
 
-  async init(): Promise<MIDIAccess> {
+  async init(): Promise<void> {
+    if (isTauri()) {
+      await this.initNative();
+      return;
+    }
     this.access = await navigator.requestMIDIAccess();
     this.attachInputs();
     this.access.onstatechange = () => this.attachInputs();
-    return this.access;
+  }
+
+  private async initNative(): Promise<void> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const { listen } = await import('@tauri-apps/api/event');
+    this.nativeUnlistens.push(
+      await listen<NativeMidiMessage>('vizzy://midi-message', (e) =>
+        this.handleBytes(e.payload.status, e.payload.data1, e.payload.data2),
+      ),
+      await listen<{ count: number }>('vizzy://midi-ports-changed', (e) => {
+        this.nativeInputs = e.payload.count;
+      }),
+    );
+    this.nativeInputs = await invoke<number>('midi_start');
   }
 
   attachInputs(): void {
@@ -46,6 +77,7 @@ export class MidiEngine {
   }
 
   get inputCount(): number {
+    if (this.nativeUnlistens.length > 0) return this.nativeInputs;
     return this.access ? this.access.inputs.size : 0;
   }
 
@@ -60,6 +92,10 @@ export class MidiEngine {
   handleMessage(event: MIDIMessageEvent): void {
     if (!event.data) return;
     const [status, cc, value] = event.data;
+    this.handleBytes(status, cc, value);
+  }
+
+  handleBytes(status: number, cc: number, value: number): void {
     if ((status & 0xf0) !== CC_STATUS) return;
 
     if (this.armedControl) {
@@ -94,6 +130,13 @@ export class MidiEngine {
         input.onmidimessage = null;
       });
       this.access.onstatechange = null;
+    }
+    if (this.nativeUnlistens.length > 0) {
+      this.nativeUnlistens.forEach((unlisten) => unlisten());
+      this.nativeUnlistens = [];
+      void import('@tauri-apps/api/core').then(({ invoke }) =>
+        invoke('midi_stop').catch(() => {}),
+      );
     }
   }
 }
