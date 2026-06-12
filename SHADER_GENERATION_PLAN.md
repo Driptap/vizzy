@@ -21,6 +21,13 @@ the third is rejected by glslang as well. The planned A2 fix
 bottleneck is that small local models cannot reliably emit strictly-valid
 GLSL, and no compiler swap fixes the model.
 
+(Why Electron felt better with the same model: ANGLE's compile errors are
+precise — `no matching overload for mix(vec3, vec4, float)` — so the repair
+loop usually converged on the second attempt, and ANGLE tolerates a few
+out-of-spec slips naga rejects. Electron wasn't getting better code; it was
+recovering from bad code better. The patch approach removes the need to
+recover at all.)
+
 Meanwhile the procedural scene path — LLM emits a strict JSON `SceneSpec`,
 `lib/expr.ts` compiles a whitelisted math expression, trusted code builds the
 geometry — works essentially every time, on the same models. Small models are
@@ -50,22 +57,77 @@ as `SceneSpec`, scaled up:
 }
 ```
 
-- **Generators** (the base field, ~12 to start): `bars` / `scope`
-  (equalizer-style, audio-band driven), `tunnel`, `rings`, `plasma`,
-  `kaleido-flow`, `starfield`, `waves`, `noise-field`, `grid`, `spiral`,
-  `particles`, `metaballs`. Each is a short, hand-polished WGSL function with
-  a small param struct — written once, fun by construction.
-- **Warps** (ordered domain modifiers, ~8): mirror, kaleido(n), swirl, zoom-
-  pulse, scroll, pixelate, ripple, fisheye. Composable; each optionally
+- **Generators**: the base field. The catalog below is mined from the
+  classic-visualizer canon — each is a short, hand-polished WGSL function
+  with a small param struct, written once, fun by construction.
+- **Warps** (ordered domain modifiers): mirror, kaleido(n), swirl,
+  fisheye/barrel, ripple, zoom-pulse, scroll, polar wrap, tile/repeat,
+  shear-wobble, pixelate. Composable in spec order; each optionally
   audio-modulated.
-- **Palette**: IQ cosine palettes (4 vec3 coefficients — models are good at
-  these and they always look intentional) or hex stops, linearized like the
-  scene palettes.
+- **Palette**: named presets (`synthwave`, `fire`, `ice`, `matrix`, `miami`,
+  `acid`, `vapor`, `lasergrid`, `mono-amber`, `rainbow`) — the easiest thing
+  for a small model to pick well — plus custom IQ cosine coefficients or hex
+  stops for when it has an opinion. All linearized like the scene palettes.
 - **Audio routing** is first-class data, not something the model has to wire
   in code — every patch is audio-reactive by construction.
-- **Post / trail**: a per-deck ping-pong history texture gives real feedback
-  trails — the very thing the model hallucinated `colortex` for. The old
-  WebGL path never had this; it's a strict upgrade.
+- **Post / feedback**: a per-deck ping-pong history texture gives real
+  feedback — the very thing the model hallucinated `colortex` for. Two modes:
+  plain decay **trail**, and the MilkDrop core trick — a per-frame **feedback
+  transform** (zoom/rotate/shift/warp the previous frame, draw the generator
+  on top). That one technique is responsible for most of what people remember
+  as "the Winamp visualizer look", and it's cheap on wgpu. Plus scanlines,
+  posterize, chroma aberration, grain, vignette. The old WebGL path had none
+  of this; it's a strict upgrade.
+
+### Generator catalog
+
+Inspiration sources: Winamp AVS presets, MilkDrop, G-Force / iTunes
+visualizer, Atari Video Music, Amiga/PC demoscene effects, Rutt-Etra video
+synthesis, lava lamps and op-art. Grouped into families so the system prompt
+can describe them compactly. `[fb]` = needs the feedback buffer (G1),
+`[wave]` = needs the raw waveform/spectrum tap (G4 audio extension).
+
+**Spectrum & scope** (Winamp/foobar heritage — the "equalizer" prompts):
+| `bars` | classic vertical spectrum bars, peak-hold caps, the Winamp EQ look |
+| `radial-spectrum` | bars bent around a circle, pulsing mandala-meter |
+| `scope` | oscilloscope waveform line (pseudo-waveform synthesized from the 4 bands until `[wave]` lands, then real) |
+| `lissajous` | XY-scope curves looping on bass, AVS "dot plane" feel |
+| `vu-needles` | big analog VU meters, skeuomorphic needle swing |
+| `fire-spectrum` | spectrum bars as rising flames, classic AVS preset |
+
+**Flight & tunnels** (demoscene): `tunnel` (procedural ring/checker tunnel),
+`starfield` (hyperspace), `vortex` (twisting wormhole), `synthwave-grid`
+(Tron/outrun horizon grid with sun).
+
+**Plasma & fields** (Amiga/PC demos): `plasma` (layered sine plasma),
+`copper-bars` (Amiga raster bars, glossy horizontal beams), `interference`
+(moiré ring interference from drifting emitters), `noise-flow` (fbm flow
+field), `metaballs` (lava-lamp blobs), `caustics` (underwater light webs).
+
+**Geometry & mandalas** (op-art/G-Force): `kaleido-mandala` (sacred-geometry
+fold), `voronoi` (stained-glass cells lighting up per band), `truchet`
+(self-connecting tile maze), `hex-pulse` (hexagon grid rippling outward from
+beats), `spirograph` (harmonograph curve trails).
+
+**Fractals**: `julia-drift` (Julia set with the seed orbiting on audio),
+`kali-ifs` (kaliset/IFS fold, the "fractal flame" vibe, fixed iteration
+count).
+
+**Retro hardware & glitch**: `matrix-rain` (falling glyph columns),
+`atari-diamonds` (Atari Video Music expanding diamonds), `rutt-etra`
+(horizontal scanlines displaced by a synthesized luma field — the Bowie
+"Heroes" look), `vhs` (analog tracking noise, color bleed).
+
+**Simulations** `[fb]` (Wave 2 / G4): `game-of-life` (cellular automaton
+seeded by audio onsets), `reaction-diffusion` (Turing-pattern crawl),
+`fluid-smoke` (curl-noise advected smoke), `boids` (swarming fireflies).
+
+Wave 1 (G1) ships everything except the `[fb]`-simulation and `[wave]`
+families — roughly 26 generators. With ~11 warps, ordered chains, palette
+presets, audio routing, and the feedback transform, the combination space is
+effectively unbounded; the few-shot examples map famous looks to patches
+("winamp style" → `bars` + mirror + trail; "milkdrop" → `noise-flow` +
+feedback transform zoom 1.02 rotate 0.002).
 
 ### Render side
 
@@ -113,9 +175,9 @@ spec order. All numeric params live in a uniform buffer, so:
 
 The expressivity ceiling is the honest tradeoff: a patch can only say what the
 block library can render. Mitigations: the combination space is already huge
-(12 generators × ordered warp chains × palettes × audio routings), the library
-grows cheaply (a new generator is ~30 lines of WGSL), and G4's expression hook
-re-opens unbounded territory safely.
+(~26 generators × ordered warp chains × feedback transforms × palettes ×
+audio routings), the library grows cheaply (a new generator is ~30 lines of
+WGSL), and G4's expression hook re-opens unbounded territory safely.
 
 ## Phases
 
@@ -126,9 +188,10 @@ cosine palette, audio routing. Hand-write the three patches the failed prompts
 audio, and look at least as fun as the old Electron GLSL decks. This de-risks
 the whole plan before any LLM work.
 
-**G1 — Full library + trail.** Remaining generators and warps; per-deck
-ping-pong trail buffer for `post.trail`; pairwise generator×warp GPU compile
-tests in the ignored suite. Defaults: `DEFAULT_DECK_BODIES` →
+**G1 — Wave-1 library + feedback.** The full Wave-1 catalog (~26 generators,
+~11 warps, palette presets); per-deck ping-pong buffer powering both decay
+trails and the MilkDrop feedback transform; pairwise generator×warp GPU
+compile tests in the ignored suite. Defaults: `DEFAULT_DECK_BODIES` →
 `DEFAULT_DECK_PATCHES` (the four baseline decks become hand-written patches).
 
 **G2 — LLM integration.** `parseVisualSpec` + JSON-schema structured output +
@@ -143,6 +206,13 @@ with it (clean slate confirmed). Workstream A1's failure-corpus logging is no
 longer needed and is not built.
 
 **G4 — Stretch.**
+- **Waveform/spectrum tap**: extend the in-process audio share (the
+  `RawLevels` Arc) with a small waveform + spectrum array so `scope`,
+  `lissajous`, and `bars` graduate from band-synthesized to true signal —
+  the last fidelity gap versus a real Winamp scope.
+- **Simulation generators** `[fb]`: `game-of-life`, `reaction-diffusion`,
+  `fluid-smoke`, `boids` — feedback-buffer state machines, the deepest
+  "alive" looks in the catalog.
 - **Expression hook**: optional spec fields (e.g. a custom field function
   `"field": "sin(x*8.0 + t) * cos(y*3.0)"`) compiled by an expr-grammar →
   WGSL transpiler (port of `lib/expr.ts`'s whitelist grammar, emitting WGSL
