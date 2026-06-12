@@ -35,6 +35,16 @@ const JPEG_QUALITY: u8 = 70;
 const FRAME_EVENT: &str = "vizzy://render-frame";
 #[cfg(target_os = "macos")]
 const TEXTURE_SHARE_EVENT: &str = "vizzy://texture-share";
+const GLOW_EVENT: &str = "vizzy://glow";
+
+/// MSAA samples for the mesh passes (models/landscapes/scenes) when the
+/// adapter supports it on the deck-target format; deck shader quads and
+/// sprites don't need it, mesh silhouettes do.
+const MESH_MSAA_SAMPLES: u32 = 4;
+/// Master glow: luma threshold for the bright pass and the additive
+/// composite strength — tasteful stage glow, not bloom soup.
+const GLOW_THRESHOLD: f32 = 0.6;
+const GLOW_STRENGTH: f32 = 0.6;
 
 /// The master composite is always rendered to this persistent offscreen
 /// target; the window pass and Syphon both consume it. Bgra8Unorm because
@@ -59,10 +69,29 @@ enum FrameEvent {
 
 /// A mesh parsed/normalized off the render thread, ready for GPU upload.
 pub(crate) struct StagedMesh {
-    /// Interleaved pos(3) normal(3) color(3) — see vs_mesh in content.wgsl.
+    /// Interleaved pos(3) normal(3) color(3) uv(2) — see vs_mesh in
+    /// content.wgsl.
     pub verts: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Per-primitive draw ranges + materials (glTF primitives; OBJ/STL and
+    /// procedural scenes are one whole-mesh primitive).
+    pub primitives: Vec<content::MeshPrimitive>,
+    /// Decoded base-colour textures the primitives reference by index.
+    pub textures: Vec<content::MeshTexture>,
     pub kind: StagedMeshKind,
+}
+
+impl StagedMesh {
+    pub(crate) fn from_mesh(mesh: content::MeshData, kind: StagedMeshKind) -> Self {
+        let verts = content::interleave(&mesh);
+        Self {
+            verts,
+            indices: mesh.indices,
+            primitives: mesh.primitives,
+            textures: mesh.textures,
+            kind,
+        }
+    }
 }
 
 pub(crate) enum StagedMeshKind {
@@ -129,6 +158,11 @@ pub(crate) enum Job {
     /// the resulting share state.
     #[cfg(target_os = "macos")]
     TextureShare {
+        on: bool,
+        reply: SyncSender<Result<bool, String>>,
+    },
+    /// Toggle the master glow (bloom) post chain. Replies with the state.
+    Glow {
         on: bool,
         reply: SyncSender<Result<bool, String>>,
     },
@@ -319,11 +353,7 @@ pub async fn render_stage_model(
     // center + 2.2/maxDim baked in: the client's unit transforms render at
     // the same size THREE's group.scale = baseScale did.
     content::bake_model_normalization(&mut mesh);
-    let staged = StagedMesh {
-        verts: content::interleave(&mesh),
-        indices: mesh.indices,
-        kind: StagedMeshKind::Model,
-    };
+    let staged = StagedMesh::from_mesh(mesh, StagedMeshKind::Model);
     run_job(&state, |reply| Job::StageMesh {
         slot,
         mesh: Box::new(staged),
@@ -341,10 +371,9 @@ pub async fn render_stage_landscape(
     let mut mesh = content::load_mesh(Path::new(&path))?;
     let layout = content::bake_tile_layout(&mut mesh, true, true);
     let (span, cam_height) = content::landscape_meta(&layout, false); // fly-over
-    let staged = StagedMesh {
-        verts: content::interleave(&mesh),
-        indices: mesh.indices,
-        kind: StagedMeshKind::Flight {
+    let staged = StagedMesh::from_mesh(
+        mesh,
+        StagedMeshKind::Flight {
             base_scale: layout.base_scale,
             span,
             cam_height,
@@ -352,7 +381,7 @@ pub async fn render_stage_landscape(
             rig: content::LANDSCAPE_RIG,
             fog_color: [0.0, 0.0, 0.0], // landscapes fade to black
         },
-    };
+    );
     run_job(&state, |reply| Job::StageMesh {
         slot,
         mesh: Box::new(staged),
@@ -378,18 +407,18 @@ pub async fn render_stage_scene(
     // rests on y=0 and is flown over
     let layout = content::bake_tile_layout(&mut mesh, false, !through);
     let (span, cam_height) = content::landscape_meta(&layout, through);
-    let staged = StagedMesh {
-        verts: content::interleave(&mesh),
-        indices: mesh.indices,
-        kind: StagedMeshKind::Flight {
+    let staged = StagedMesh::from_mesh(
+        mesh,
+        StagedMeshKind::Flight {
             base_scale: layout.base_scale,
             span,
             cam_height,
             through,
             rig: content::SCENE_RIG,
-            fog_color,
+            // the TS palette hex is sRGB; fog mixes in linear like THREE
+            fog_color: content::srgb_to_linear3(fog_color),
         },
-    };
+    );
     run_job(&state, |reply| Job::StageMesh {
         slot,
         mesh: Box::new(staged),
@@ -433,6 +462,31 @@ pub fn render_texture_share(
 ) -> Result<bool, String> {
     let _ = (app, state, on);
     Err("Texture sharing is macOS-only for now (Spout planned)".to_string())
+}
+
+/// Toggle the master glow (bloom) post chain. Returns the resulting state
+/// and notifies the UI via GLOW_EVENT, mirroring render_texture_share.
+#[tauri::command]
+pub fn render_glow(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RenderState>,
+    on: bool,
+) -> Result<bool, String> {
+    let job_tx = state
+        .job_sender()
+        .ok_or_else(|| "render engine not started".to_string())?;
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    job_tx
+        .send(Job::Glow {
+            on,
+            reply: reply_tx,
+        })
+        .map_err(|_| "render thread stopped".to_string())?;
+    let glowing = reply_rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "render thread did not respond".to_string())??;
+    let _ = app.emit(GLOW_EVENT, serde_json::json!({ "on": glowing }));
+    Ok(glowing)
 }
 
 struct ReadTarget {
@@ -557,9 +611,18 @@ enum DeckContent {
     Mesh {
         vertices: wgpu::Buffer,
         indices: wgpu::Buffer,
-        index_count: u32,
+        prims: Vec<PrimDraw>,
         kind: StagedMeshKind,
+        // kept alive for the primitive bind groups' sake
+        _textures: Vec<wgpu::Texture>,
     },
+}
+
+/// One mesh primitive's index range + material bind group (group 1).
+struct PrimDraw {
+    range: std::ops::Range<u32>,
+    bind_group: wgpu::BindGroup,
+    _uniform: wgpu::Buffer,
 }
 
 /// What frame() decided to draw into a deck target this frame.
@@ -574,8 +637,31 @@ enum SlotDraw {
 
 /// Floats in the sprite uniform (3 vec4s — see SpriteUniforms in content.wgsl).
 const SPRITE_UNIFORM_FLOATS: usize = 12;
-/// Interleaved mesh vertex: pos(3) + normal(3) + color(3).
-const MESH_VERTEX_FLOATS: usize = 9;
+/// Interleaved mesh vertex: pos(3) + normal(3) + color(3) + uv(2).
+const MESH_VERTEX_FLOATS: usize = 11;
+
+/// The three glow passes' pipelines (size-independent, built once).
+struct GlowPipelines {
+    threshold: wgpu::RenderPipeline,
+    blur: wgpu::RenderPipeline,
+    composite: wgpu::RenderPipeline,
+}
+
+/// Size-dependent glow resources: two half-res ping-pong targets and the
+/// bind groups wiring master → bright → blur → bright → master. Rebuilt
+/// whenever the master target changes.
+struct GlowChain {
+    master_size: (u32, u32),
+    bright_view: wgpu::TextureView,
+    blur_view: wgpu::TextureView,
+    bg_threshold: wgpu::BindGroup,
+    bg_blur_h: wgpu::BindGroup,
+    bg_blur_v: wgpu::BindGroup,
+    bg_composite: wgpu::BindGroup,
+    _textures: [wgpu::Texture; 2],
+    _uniforms: [wgpu::Buffer; 4],
+    _sampler: wgpu::Sampler,
+}
 
 pub(crate) struct GpuCore {
     adapter: wgpu::Adapter,
@@ -614,7 +700,28 @@ pub(crate) struct GpuCore {
     deck_content: Vec<DeckContent>,
     /// Shared Depth32Float buffer for the mesh passes (slot passes run
     /// sequentially and each clears it); recreated with the deck targets.
+    /// Multisampled when the mesh passes run at 4x.
     depth_view: wgpu::TextureView,
+    /// Per-primitive material bind group layout (group 1 of the mesh
+    /// pipelines): sampler + base-colour texture + PrimUniforms.
+    prim_bind_layout: wgpu::BindGroupLayout,
+    /// 1x1 white sRGB fallback so untextured primitives sample a no-op.
+    white_view: wgpu::TextureView,
+    _white_texture: wgpu::Texture,
+    /// Trilinear repeat sampler (white fallback / default wrap modes).
+    mesh_sampler: wgpu::Sampler,
+    /// MESH_MSAA_SAMPLES when the adapter supports it on the deck format,
+    /// else 1 (clean fallback — pipelines and targets all follow this).
+    mesh_samples: u32,
+    /// Shared multisampled colour target the mesh passes resolve into the
+    /// deck targets from (None at 1x); recreated with the deck size.
+    msaa_view: Option<wgpu::TextureView>,
+
+    // master glow (bloom) post chain — B5
+    glow_pipelines: GlowPipelines,
+    glow_bind_layout: wgpu::BindGroupLayout,
+    glow_enabled: bool,
+    glow: Option<GlowChain>,
 
     sampler: wgpu::Sampler,
     comp_uniform: wgpu::Buffer,
@@ -659,6 +766,14 @@ impl GpuCore {
         });
         if let Some(err) = tauri::async_runtime::block_on(scope.pop()) {
             return Err(format!("content shader failed to compile: {err}"));
+        }
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let glow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vizzy-glow"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("glow.wgsl"))),
+        });
+        if let Some(err) = tauri::async_runtime::block_on(scope.pop()) {
+            return Err(format!("glow shader failed to compile: {err}"));
         }
 
         let deck_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -918,11 +1033,61 @@ impl GpuCore {
                 count: None,
             }],
         });
+        // Group 1: per-primitive material — sampler + base-colour texture
+        // (sRGB view) + PrimUniforms.
+        let prim_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vizzy-prim-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            (content::PRIM_UNIFORM_FLOATS * 4) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+            ],
+        });
         let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vizzy-mesh-layout"),
-            bind_group_layouts: &[Some(&mesh_bind_layout)],
+            bind_group_layouts: &[Some(&mesh_bind_layout), Some(&prim_bind_layout)],
             immediate_size: 0,
         });
+        // MSAA 4x on the mesh passes when the deck format supports it (it
+        // does on Metal); otherwise fall back to 1x cleanly.
+        let mesh_samples = if adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
+            .flags
+            .sample_count_supported(MESH_MSAA_SAMPLES)
+            && adapter
+                .get_texture_format_features(wgpu::TextureFormat::Depth32Float)
+                .flags
+                .sample_count_supported(MESH_MSAA_SAMPLES)
+        {
+            MESH_MSAA_SAMPLES
+        } else {
+            1
+        };
         // Models cull like THREE FrontSide; flight tiles render both faces
         // because the mirrored copy flips winding.
         let mesh_model_pipeline = Self::mesh_pipeline(
@@ -930,9 +1095,98 @@ impl GpuCore {
             &mesh_layout,
             &content_shader,
             Some(wgpu::Face::Back),
+            mesh_samples,
         );
         let mesh_flight_pipeline =
-            Self::mesh_pipeline(&device, &mesh_layout, &content_shader, None);
+            Self::mesh_pipeline(&device, &mesh_layout, &content_shader, None, mesh_samples);
+
+        // White fallback so fs_mesh always has a texture to sample.
+        let white_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vizzy-mesh-white"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            white_texture.as_image_copy(),
+            &[255u8; 4],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let white_view = white_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mesh_sampler =
+            Self::make_mesh_sampler(&device, content::TexWrap::Repeat, content::TexWrap::Repeat);
+
+        // Glow post chain: one shared bind layout + three pipelines.
+        let glow_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vizzy-glow-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let glow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vizzy-glow-layout"),
+            bind_group_layouts: &[Some(&glow_bind_layout)],
+            immediate_size: 0,
+        });
+        let glow_pipelines = GlowPipelines {
+            threshold: Self::glow_pipeline(
+                &device,
+                &glow_layout,
+                &glow_shader,
+                "fs_threshold",
+                false,
+            ),
+            blur: Self::glow_pipeline(&device, &glow_layout, &glow_shader, "fs_blur", false),
+            composite: Self::glow_pipeline(
+                &device,
+                &glow_layout,
+                &glow_shader,
+                "fs_composite",
+                true,
+            ),
+        };
 
         let sprite_uniforms: Vec<_> = (0..SLOT_COUNT)
             .map(|i| {
@@ -976,7 +1230,8 @@ impl GpuCore {
 
         let deck_size = deck_size_for_aspect(aspect);
         let (deck_textures, deck_views) = Self::build_deck_textures(&device, deck_size);
-        let depth_view = Self::make_depth_view(&device, deck_size);
+        let depth_view = Self::make_depth_view(&device, deck_size, mesh_samples);
+        let msaa_view = Self::make_msaa_view(&device, deck_size, mesh_samples);
         let comp_bind_group = Self::build_comp_bind_group(
             &device,
             &comp_bind_layout,
@@ -1019,6 +1274,16 @@ impl GpuCore {
             mesh_bind_groups,
             deck_content: (0..SLOT_COUNT).map(|_| DeckContent::None).collect(),
             depth_view,
+            prim_bind_layout,
+            white_view,
+            _white_texture: white_texture,
+            mesh_sampler,
+            mesh_samples,
+            msaa_view,
+            glow_pipelines,
+            glow_bind_layout,
+            glow_enabled: false,
+            glow: None,
             sampler,
             comp_uniform,
             comp_bind_group,
@@ -1032,6 +1297,7 @@ impl GpuCore {
         layout: &wgpu::PipelineLayout,
         module: &wgpu::ShaderModule,
         cull_mode: Option<wgpu::Face>,
+        sample_count: u32,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vizzy-mesh-pipeline"),
@@ -1044,7 +1310,7 @@ impl GpuCore {
                     array_stride: (MESH_VERTEX_FLOATS * 4) as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, 1 => Float32x3, 2 => Float32x3
+                        0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x2
                     ],
                 }],
             },
@@ -1062,7 +1328,10 @@ impl GpuCore {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module,
                 entry_point: Some("fs_mesh"),
@@ -1078,7 +1347,81 @@ impl GpuCore {
         })
     }
 
-    fn make_depth_view(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    fn glow_pipeline(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        module: &wgpu::ShaderModule,
+        fs_entry: &str,
+        additive: bool,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(fs_entry),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs_glow"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fs_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: MASTER_FORMAT,
+                    // the composite ADDS the blurred highlights onto the
+                    // master; the intermediate passes overwrite
+                    blend: additive.then_some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    fn make_mesh_sampler(
+        device: &wgpu::Device,
+        wrap_u: content::TexWrap,
+        wrap_v: content::TexWrap,
+    ) -> wgpu::Sampler {
+        let address = |w: content::TexWrap| match w {
+            content::TexWrap::Repeat => wgpu::AddressMode::Repeat,
+            content::TexWrap::Clamp => wgpu::AddressMode::ClampToEdge,
+            content::TexWrap::Mirror => wgpu::AddressMode::MirrorRepeat,
+        };
+        // trilinear: linear min/mag + linear between the CPU-built mips
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vizzy-mesh-sampler"),
+            address_mode_u: address(wrap_u),
+            address_mode_v: address(wrap_v),
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        })
+    }
+
+    fn make_depth_view(
+        device: &wgpu::Device,
+        size: (u32, u32),
+        sample_count: u32,
+    ) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("vizzy-deck-depth"),
@@ -1088,13 +1431,40 @@ impl GpuCore {
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// The shared multisampled colour target the mesh passes resolve from;
+    /// None when MSAA is off (mesh passes then render straight to the deck).
+    fn make_msaa_view(
+        device: &wgpu::Device,
+        size: (u32, u32),
+        sample_count: u32,
+    ) -> Option<wgpu::TextureView> {
+        (sample_count > 1).then(|| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("vizzy-deck-msaa"),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        })
     }
 
     fn build_deck_textures(
@@ -1238,7 +1608,8 @@ impl GpuCore {
         let (textures, views) = Self::build_deck_textures(&self.device, self.deck_size);
         self.deck_textures = textures;
         self.deck_views = views;
-        self.depth_view = Self::make_depth_view(&self.device, self.deck_size);
+        self.depth_view = Self::make_depth_view(&self.device, self.deck_size, self.mesh_samples);
+        self.msaa_view = Self::make_msaa_view(&self.device, self.deck_size, self.mesh_samples);
         self.comp_bind_group = Self::build_comp_bind_group(
             &self.device,
             &self.comp_bind_layout,
@@ -1378,7 +1749,65 @@ impl GpuCore {
         Ok(())
     }
 
-    /// Upload a parsed mesh (model or flight tile) and swap it in.
+    /// Upload one base-colour texture: sRGB format (hardware decode at
+    /// sample time) with a full CPU box-filtered mip chain.
+    fn upload_mesh_texture(&self, tex: &content::MeshTexture) -> Result<wgpu::Texture, String> {
+        let max = self.device.limits().max_texture_dimension_2d;
+        if tex.width == 0 || tex.height == 0 || tex.width > max || tex.height > max {
+            return Err(format!(
+                "mesh texture size {}x{} unsupported (max {max})",
+                tex.width, tex.height
+            ));
+        }
+        if tex.rgba.len() != (tex.width as usize) * (tex.height as usize) * 4 {
+            return Err("mesh texture pixel data does not match its dimensions".into());
+        }
+        let mip_count = content::mip_level_count(tex.width, tex.height);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vizzy-mesh-texture"),
+            size: wgpu::Extent3d {
+                width: tex.width,
+                height: tex.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut level = (tex.rgba.clone(), tex.width, tex.height);
+        for mip in 0..mip_count {
+            if mip > 0 {
+                level = content::next_mip(&level.0, level.1, level.2);
+            }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level.0,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.1 * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: level.1,
+                    height: level.2,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        Ok(texture)
+    }
+
+    /// Upload a parsed mesh (model or flight tile) and swap it in: vertex +
+    /// index buffers, sRGB base-colour textures (mipped), and one material
+    /// bind group per primitive (untextured primitives share the 1x1 white).
     pub(crate) fn stage_mesh(&mut self, slot: usize, staged: StagedMesh) -> Result<(), String> {
         if slot >= SLOT_COUNT {
             return Err(format!("invalid deck slot {slot} (expected 0..7)"));
@@ -1393,6 +1822,70 @@ impl GpuCore {
         if staged.indices.iter().any(|&i| i as usize >= vert_count) {
             return Err("mesh index out of range".into());
         }
+        if staged.primitives.is_empty() {
+            return Err("mesh has no primitives".into());
+        }
+        let index_count = staged.indices.len() as u32;
+        for prim in &staged.primitives {
+            let end = prim.start.checked_add(prim.count);
+            if prim.count == 0 || end.is_none() || end.unwrap() > index_count {
+                return Err("mesh primitive range out of bounds".into());
+            }
+            if prim.texture.is_some_and(|t| t >= staged.textures.len()) {
+                return Err("mesh primitive texture index out of range".into());
+            }
+        }
+
+        let mut textures = Vec::with_capacity(staged.textures.len());
+        let mut texture_binds = Vec::with_capacity(staged.textures.len());
+        for tex in &staged.textures {
+            let texture = self.upload_mesh_texture(tex)?;
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = Self::make_mesh_sampler(&self.device, tex.wrap_u, tex.wrap_v);
+            textures.push(texture);
+            texture_binds.push((view, sampler));
+        }
+
+        let prims = staged
+            .primitives
+            .iter()
+            .map(|prim| {
+                let uniform = Self::buffer_with_data(
+                    &self.device,
+                    "vizzy-prim-uniform",
+                    wgpu::BufferUsages::UNIFORM,
+                    &floats_to_bytes(&content::pack_prim_uniform(prim)),
+                );
+                let (view, sampler) = match prim.texture {
+                    Some(t) => (&texture_binds[t].0, &texture_binds[t].1),
+                    None => (&self.white_view, &self.mesh_sampler),
+                };
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("vizzy-prim-bg"),
+                    layout: &self.prim_bind_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: uniform.as_entire_binding(),
+                        },
+                    ],
+                });
+                PrimDraw {
+                    range: prim.start..prim.start + prim.count,
+                    bind_group,
+                    _uniform: uniform,
+                }
+            })
+            .collect();
+
         let vertices = Self::buffer_with_data(
             &self.device,
             "vizzy-mesh-verts",
@@ -1409,11 +1902,13 @@ impl GpuCore {
             wgpu::BufferUsages::INDEX,
             &index_bytes,
         );
+        // swap only after the new content is fully built
         self.deck_content[slot] = DeckContent::Mesh {
             vertices,
             indices,
-            index_count: staged.indices.len() as u32,
+            prims,
             kind: staged.kind,
+            _textures: textures,
         };
         Ok(())
     }
@@ -1501,6 +1996,105 @@ impl GpuCore {
             &self.sampler,
             &self.master_target.view,
         );
+        // the glow chain samples the master target — rebuild lazily
+        self.glow = None;
+    }
+
+    /// Build (or rebuild) the glow chain for the current master target.
+    /// Called only while glow is enabled, BEFORE frame encoding starts.
+    fn ensure_glow(&mut self) {
+        let size = self.master_target.size;
+        if matches!(&self.glow, Some(g) if g.master_size == size) {
+            return;
+        }
+        let half = ((size.0 / 2).max(1), (size.1 / 2).max(1));
+        let make_half = |label: &str| {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: half.0,
+                    height: half.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: MASTER_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            (tex, view)
+        };
+        let (bright_tex, bright_view) = make_half("vizzy-glow-bright");
+        let (blur_tex, blur_view) = make_half("vizzy-glow-blur");
+        // (blur step x, blur step y, threshold, strength) per pass
+        let uniform = |label: &str, params: [f32; 4]| {
+            Self::buffer_with_data(
+                &self.device,
+                label,
+                wgpu::BufferUsages::UNIFORM,
+                &floats_to_bytes(&params),
+            )
+        };
+        let texel = (1.0 / half.0 as f32, 1.0 / half.1 as f32);
+        let uniforms = [
+            uniform("vizzy-glow-u-thresh", [0.0, 0.0, GLOW_THRESHOLD, 0.0]),
+            uniform("vizzy-glow-u-h", [texel.0, 0.0, 0.0, 0.0]),
+            uniform("vizzy-glow-u-v", [0.0, texel.1, 0.0, 0.0]),
+            uniform("vizzy-glow-u-comp", [0.0, 0.0, 0.0, GLOW_STRENGTH]),
+        ];
+        // clamp so edge highlights don't bleed in from a wrapped border
+        let glow_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vizzy-glow-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bind = |label: &str, src: &wgpu::TextureView, uniform: &wgpu::Buffer| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.glow_bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&glow_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let bg_threshold = bind(
+            "vizzy-glow-bg-thresh",
+            &self.master_target.view,
+            &uniforms[0],
+        );
+        let bg_blur_h = bind("vizzy-glow-bg-h", &bright_view, &uniforms[1]);
+        let bg_blur_v = bind("vizzy-glow-bg-v", &blur_view, &uniforms[2]);
+        let bg_composite = bind("vizzy-glow-bg-comp", &bright_view, &uniforms[3]);
+        self.glow = Some(GlowChain {
+            master_size: size,
+            bg_threshold,
+            bg_blur_h,
+            bg_blur_v,
+            bg_composite,
+            bright_view,
+            blur_view,
+            _textures: [bright_tex, blur_tex],
+            _uniforms: uniforms,
+            _sampler: glow_sampler,
+        });
     }
 
     fn present_pipeline_for(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
@@ -1616,9 +2210,13 @@ impl GpuCore {
         self.queue
             .write_buffer(&self.comp_uniform, 0, &floats_to_bytes(&comp));
 
-        // The present pipeline borrow must end before encoding starts.
+        // The present pipeline borrow must end before encoding starts; same
+        // for the glow chain (it binds the current master target).
         if let Some((_, format)) = surface {
             self.present_pipeline_for(format);
+        }
+        if self.glow_enabled {
+            self.ensure_glow();
         }
 
         let mut encoder = self
@@ -1629,19 +2227,30 @@ impl GpuCore {
 
         for (i, &draw) in draws.iter().enumerate() {
             // Cleared to transparent black each frame — alpha is coverage.
-            let needs_depth = matches!(draw, SlotDraw::Model | SlotDraw::Flight);
+            // Mesh passes render multisampled and resolve into the deck
+            // target; shader/sprite passes hit the deck target directly.
+            let is_mesh = matches!(draw, SlotDraw::Model | SlotDraw::Flight);
+            let msaa = if is_mesh {
+                self.msaa_view.as_ref()
+            } else {
+                None
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("vizzy-deck-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.deck_views[i],
+                    view: msaa.unwrap_or(&self.deck_views[i]),
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: msaa.map(|_| &self.deck_views[i]),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
+                        store: if msaa.is_some() {
+                            wgpu::StoreOp::Discard // only the resolve survives
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
                     },
                 })],
-                depth_stencil_attachment: needs_depth.then_some(
+                depth_stencil_attachment: is_mesh.then_some(
                     wgpu::RenderPassDepthStencilAttachment {
                         view: &self.depth_view,
                         depth_ops: Some(wgpu::Operations {
@@ -1674,7 +2283,7 @@ impl GpuCore {
                     if let DeckContent::Mesh {
                         vertices,
                         indices,
-                        index_count,
+                        prims,
                         ..
                     } = &self.deck_content[i]
                     {
@@ -1688,7 +2297,10 @@ impl GpuCore {
                         pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                         for tile in 0..tiles {
                             pass.set_bind_group(0, &self.mesh_bind_groups[i][tile], &[]);
-                            pass.draw_indexed(0..*index_count, 0, 0..1);
+                            for prim in prims {
+                                pass.set_bind_group(1, &prim.bind_group, &[]);
+                                pass.draw_indexed(prim.range.clone(), 0, 0..1);
+                            }
                         }
                     }
                 }
@@ -1760,6 +2372,68 @@ impl GpuCore {
             pass.set_pipeline(&self.master_pipeline);
             pass.set_bind_group(0, &self.comp_bind_group, &[]);
             pass.draw(0..3, 0..1);
+        }
+
+        // Glow post chain on the master target, BEFORE the present blit and
+        // the (post-submit) Syphon publish / monitor encode, so every
+        // consumer sees it. Off = zero extra passes.
+        if self.glow_enabled {
+            if let Some(glow) = &self.glow {
+                let mut run = |label: &str,
+                               pipeline: &wgpu::RenderPipeline,
+                               bind: &wgpu::BindGroup,
+                               target: &wgpu::TextureView,
+                               load: wgpu::LoadOp<wgpu::Color>| {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, bind, &[]);
+                    pass.draw(0..3, 0..1);
+                };
+                let clear = wgpu::LoadOp::Clear(wgpu::Color::BLACK);
+                run(
+                    "vizzy-glow-threshold",
+                    &self.glow_pipelines.threshold,
+                    &glow.bg_threshold,
+                    &glow.bright_view,
+                    clear,
+                );
+                run(
+                    "vizzy-glow-blur-h",
+                    &self.glow_pipelines.blur,
+                    &glow.bg_blur_h,
+                    &glow.blur_view,
+                    clear,
+                );
+                run(
+                    "vizzy-glow-blur-v",
+                    &self.glow_pipelines.blur,
+                    &glow.bg_blur_v,
+                    &glow.bright_view,
+                    clear,
+                );
+                run(
+                    "vizzy-glow-composite",
+                    &self.glow_pipelines.composite,
+                    &glow.bg_composite,
+                    &self.master_target.view,
+                    wgpu::LoadOp::Load,
+                );
+            }
         }
 
         if let Some((view, format)) = surface {
@@ -1915,6 +2589,13 @@ fn render_loop(
                     // Drop the surface before the window dies (metal layer).
                     master = None;
                     let _ = reply.send(());
+                }
+                Ok(Job::Glow { on, reply }) => {
+                    core.glow_enabled = on;
+                    if !on {
+                        core.glow = None; // free the half-res chain
+                    }
+                    let _ = reply.send(Ok(on));
                 }
                 #[cfg(target_os = "macos")]
                 Ok(Job::TextureShare { on, reply }) => {
@@ -2079,6 +2760,32 @@ mod tests {
             "fs_blit",
         ] {
             assert!(entries.contains(&entry), "missing entry point {entry}");
+        }
+    }
+
+    #[test]
+    fn glow_and_content_wgsl_parse_and_validate() {
+        for (name, src) in [
+            ("glow.wgsl", include_str!("glow.wgsl")),
+            ("content.wgsl", include_str!("content.wgsl")),
+        ] {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{name} failed to parse:\n{e}"));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name} failed to validate:\n{e:?}"));
+        }
+        let module = naga::front::wgsl::parse_str(include_str!("glow.wgsl")).unwrap();
+        let entries: Vec<_> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        for entry in ["vs_glow", "fs_threshold", "fs_blur", "fs_composite"] {
+            assert!(entries.contains(&entry), "missing glow entry point {entry}");
         }
     }
 
@@ -2374,10 +3081,9 @@ mod tests {
         let mut mesh = content::scene_mesh(&positions, &colors, &indices).unwrap();
         let layout = content::bake_tile_layout(&mut mesh, false, false); // tunnel
         let (span, _cam) = content::landscape_meta(&layout, true);
-        let staged = StagedMesh {
-            verts: content::interleave(&mesh),
-            indices: mesh.indices,
-            kind: StagedMeshKind::Flight {
+        let staged = StagedMesh::from_mesh(
+            mesh,
+            StagedMeshKind::Flight {
                 base_scale: layout.base_scale,
                 span,
                 cam_height: 0.0,
@@ -2385,7 +3091,7 @@ mod tests {
                 rig: content::SCENE_RIG,
                 fog_color: [0.0, 0.0, 0.0],
             },
-        };
+        );
         core.stage_mesh(0, staged).expect("stages");
 
         // Camera 0.5 in front of tile 0's triangle, identity quat (looking
@@ -2426,5 +3132,193 @@ mod tests {
         let rgba = read_deck_upright(&core, 0);
         let o = (dh / 2 * dw + dw / 2) * 4;
         assert_eq!(rgba[o + 3], 0, "hidden flight deck should be transparent");
+    }
+
+    /// Stage a camera-facing model on slot 0 and render one frame.
+    fn frame_model(core: &mut GpuCore, staged: StagedMesh) {
+        core.stage_mesh(0, staged).expect("stages");
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].draw = DeckDraw::Model(super::super::params::ModelDraw {
+            pos: [0.0, 0.0, 0.0],
+            quat: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            brightness: 0.25, // keeps the lit value well below clamp
+            light_angle: 0.0,
+            visible: true,
+        });
+        core.frame(&frame, 0.0, 0, 0, None);
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_mesh_lighting_encodes_srgb_brighter_than_linear() {
+        let mut core = boot_core();
+        // Camera-facing white triangle (+z normals), matte material.
+        let mesh = content::MeshData {
+            positions: vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            colors: vec![[1.0, 1.0, 1.0]; 3],
+            uvs: vec![[0.0, 0.0]; 3],
+            indices: vec![0, 1, 2],
+            primitives: vec![content::MeshPrimitive {
+                start: 0,
+                count: 3,
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                metallic: 0.0,
+                roughness: 1.0,
+                texture: None,
+            }],
+            textures: Vec::new(),
+        };
+        frame_model(
+            &mut core,
+            StagedMesh::from_mesh(mesh, StagedMeshKind::Model),
+        );
+
+        // Expected linear lit value at the centre (normal faces the camera):
+        // MODEL_RIG ambient + key Lambert at brightness 0.25, rim unlit.
+        let key_dir = [2.0 / 29f32.sqrt(), 3.0 / 29f32.sqrt(), 4.0 / 29f32.sqrt()];
+        let diffuse = 0.5 * 0.25 + 1.6 * 0.25 * key_dir[2];
+        // Blinn-Phong key spec: roughness 1 → shininess 2, dielectric 0.04.
+        let h_len = (key_dir[0] * key_dir[0]
+            + key_dir[1] * key_dir[1]
+            + (key_dir[2] + 1.0) * (key_dir[2] + 1.0))
+            .sqrt();
+        let n_dot_h = (key_dir[2] + 1.0) / h_len;
+        let spec = n_dot_h.powi(2) * 0.04 * 1.6 * 0.25;
+        let linear = diffuse + spec;
+        let expected = content::linear_to_srgb(linear) * 255.0;
+
+        let (dw, dh) = core.deck_size;
+        let rgba = read_deck_upright(&core, 0);
+        let o = ((dh as usize / 2) * dw as usize + dw as usize / 2) * 4;
+        let got = f32::from(rgba[o]);
+        assert!(
+            (got - expected).abs() < 10.0,
+            "centre should match the sRGB-encoded lit value (got {got}, expected {expected:.1})"
+        );
+        assert!(
+            got > linear * 255.0 + 20.0,
+            "sRGB path must read brighter than raw linear (got {got}, linear {:.1})",
+            linear * 255.0
+        );
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_textured_primitive_renders_both_checker_colors() {
+        let mut core = boot_core();
+        // 2x2 red/blue checker on a camera-facing quad with full UVs.
+        let checker = [
+            255u8, 0, 0, 255, /* */ 0, 0, 255, 255, //
+            0, 0, 255, 255, /* */ 255, 0, 0, 255,
+        ];
+        let mesh = content::MeshData {
+            positions: vec![
+                [-2.0, -2.0, 0.0],
+                [2.0, -2.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [-2.0, 2.0, 0.0],
+            ],
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            colors: vec![[1.0, 1.0, 1.0]; 4],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            primitives: vec![content::MeshPrimitive {
+                start: 0,
+                count: 6,
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                metallic: 0.0,
+                roughness: 1.0,
+                texture: Some(0),
+            }],
+            textures: vec![content::MeshTexture {
+                rgba: checker.to_vec(),
+                width: 2,
+                height: 2,
+                wrap_u: content::TexWrap::Clamp,
+                wrap_v: content::TexWrap::Clamp,
+            }],
+        };
+        frame_model(
+            &mut core,
+            StagedMesh::from_mesh(mesh, StagedMeshKind::Model),
+        );
+
+        let (dw, dh) = core.deck_size;
+        let rgba = read_deck_upright(&core, 0);
+        let (mut reds, mut blues) = (0usize, 0usize);
+        for px in rgba.chunks_exact(4) {
+            if px[3] == 255 {
+                if px[0] > 100 && px[2] < 60 {
+                    reds += 1;
+                }
+                if px[2] > 100 && px[0] < 60 {
+                    blues += 1;
+                }
+            }
+        }
+        let total = (dw as usize) * (dh as usize);
+        assert!(
+            reds > total / 50 && blues > total / 50,
+            "both checker texel colours must render (reds={reds}, blues={blues}, total={total})"
+        );
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_glow_spills_past_quad_bounds_only_when_enabled() {
+        let mut core = boot_core();
+        // Small bright quad on black: slot 0 shader, full mix.
+        let module = ingest::validate_deck_shader(
+            "void main() {
+               float b = step(abs(vUv.x - 0.5), 0.1) * step(abs(vUv.y - 0.5), 0.1);
+               gl_FragColor = vec4(vec3(b), 1.0);
+             }",
+        )
+        .unwrap();
+        core.set_deck_pipeline(0, module).unwrap();
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].uniforms.mix = 1.0;
+
+        let (mw, mh) = DEFAULT_MASTER_SIZE;
+        // The quad spans x 0.4..0.6 → right edge at 1152; probe just outside.
+        let probe = |core: &GpuCore| -> (u64, u8) {
+            let padded = read_texture(core, &core.master_target.texture, mw, mh);
+            let master = unpad_rows(&padded, mw as usize, mh as usize);
+            let mut outside = 0u64;
+            for y in (mh as usize / 2 - 10)..(mh as usize / 2 + 10) {
+                for x in 1156..1166usize {
+                    let o = (y * mw as usize + x) * 4;
+                    outside +=
+                        u64::from(master[o]) + u64::from(master[o + 1]) + u64::from(master[o + 2]);
+                }
+            }
+            let o = ((mh as usize / 2) * mw as usize + mw as usize / 2) * 4;
+            (outside, master[o]) // (energy outside the quad, centre byte)
+        };
+
+        // glow OFF (default): zero passes, nothing outside the quad
+        core.frame(&frame, 0.0, 0, 0, None);
+        let (outside_off, centre_off) = probe(&core);
+        assert!(centre_off > 200, "quad centre should be bright");
+        assert_eq!(outside_off, 0, "no glow: outside the quad must be black");
+
+        // glow ON: blurred highlights spill past the quad bounds
+        core.glow_enabled = true;
+        core.frame(&frame, 0.0, 0, 0, None);
+        let (outside_on, centre_on) = probe(&core);
+        assert!(centre_on > 200, "quad centre stays bright with glow");
+        assert!(
+            outside_on > 0,
+            "glow on: pixels outside the quad bounds must be nonzero"
+        );
+
+        // toggling off again drops the chain and the spill
+        core.glow_enabled = false;
+        core.glow = None;
+        core.frame(&frame, 0.0, 0, 0, None);
+        let (outside_off2, _) = probe(&core);
+        assert_eq!(outside_off2, 0, "glow off again: spill disappears");
     }
 }

@@ -60,36 +60,57 @@ fn fs_sprite(in: SpriteVsOut) -> @location(0) vec4<f32> {
 }
 
 // -------------------------------------------------------------------- mesh
+//
+// Colour space: every mesh input is LINEAR by the time it reaches fs_mesh —
+// vertex colours and rig constants are linearized CPU-side, the base-colour
+// texture decodes in hardware (Rgba8UnormSrgb view) — lighting and fog mix in
+// linear, and the final colour is sRGB-ENCODED before the Rgba8Unorm deck
+// target write, matching three.js's outputColorSpace = sRGB. Shader/sprite
+// decks stay display-referred and untouched.
 
 struct MeshUniforms {
   mvp: mat4x4<f32>,
   model_view: mat4x4<f32>,
-  // world-space normal matrix columns (inverse-transpose of the model 3x3)
+  // view-space normal matrix columns (inverse-transpose of model-view 3x3)
   n0: vec4<f32>,
   n1: vec4<f32>,
   n2: vec4<f32>,
-  // THREE-Lambert-ish rig: ambient + two directional lights, colours
-  // premultiplied by intensity, directions pointing TOWARD the light.
+  // THREE-style rig: ambient + two directional lights, LINEAR colours
+  // premultiplied by intensity, VIEW-space directions pointing TOWARD the
+  // light (three lights in view space too).
   ambient: vec4<f32>,
   key_dir: vec4<f32>,
   key_color: vec4<f32>,
   rim_dir: vec4<f32>,
   rim_color: vec4<f32>,
-  // rgb + enable (0 for models, 1 for flight decks)
+  // rgb (linear) + enable (0 for models, 1 for flight decks)
   fog_color: vec4<f32>,
   // near, far, unused, unused
   fog_range: vec4<f32>,
 }
 
+// Per-primitive material (one bind group per glTF primitive; untextured
+// primitives bind a shared 1x1 white texture so the sample is a no-op).
+struct PrimUniforms {
+  // linear base-colour factor (rgb; a unused)
+  base_color: vec4<f32>,
+  // metallic, Blinn-Phong shininess (from roughness, CPU-side), unused x2
+  material: vec4<f32>,
+}
+
 // binding 3: keeps the module free of group/binding collisions with the
 // sprite declarations above (each pipeline layout binds only what it uses).
 @group(0) @binding(3) var<uniform> mesh: MeshUniforms;
+@group(1) @binding(0) var mesh_samp: sampler;
+@group(1) @binding(1) var base_tex: texture_2d<f32>;
+@group(1) @binding(2) var<uniform> prim: PrimUniforms;
 
 struct MeshVsOut {
   @builtin(position) pos: vec4<f32>,
   @location(0) normal: vec3<f32>,
   @location(1) color: vec3<f32>,
-  @location(2) view_depth: f32,
+  @location(2) view_pos: vec3<f32>,
+  @location(3) uv: vec2<f32>,
 }
 
 @vertex
@@ -97,6 +118,7 @@ fn vs_mesh(
   @location(0) p: vec3<f32>,
   @location(1) n: vec3<f32>,
   @location(2) c: vec3<f32>,
+  @location(3) uv: vec2<f32>,
 ) -> MeshVsOut {
   var out: MeshVsOut;
   var clip = mesh.mvp * vec4<f32>(p, 1.0);
@@ -104,26 +126,53 @@ fn vs_mesh(
   out.pos = clip;
   out.normal = mat3x3<f32>(mesh.n0.xyz, mesh.n1.xyz, mesh.n2.xyz) * n;
   out.color = c;
-  // linear fog distance = view-space depth, like THREE's vFogDepth
-  out.view_depth = -(mesh.model_view * vec4<f32>(p, 1.0)).z;
+  // view-space position: -z is THREE's vFogDepth, -pos the view vector
+  out.view_pos = (mesh.model_view * vec4<f32>(p, 1.0)).xyz;
+  out.uv = uv;
   return out;
+}
+
+// Exact sRGB encode (the piecewise transfer function, not pow 1/2.2).
+fn encode_srgb(c: vec3<f32>) -> vec3<f32> {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
 @fragment
 fn fs_mesh(in: MeshVsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+  // sample before any divergent flow (uniformity) — hardware sRGB→linear
+  let tex = textureSample(base_tex, mesh_samp, in.uv);
   var n = normalize(in.normal);
   // DoubleSide: the mirrored flight tile flips winding, so back faces shade
   // with the flipped normal (same trick THREE's Lambert uses).
   if (!front) {
     n = -n;
   }
-  let lit = mesh.ambient.rgb
-    + mesh.key_color.rgb * max(dot(n, mesh.key_dir.xyz), 0.0)
-    + mesh.rim_color.rgb * max(dot(n, mesh.rim_dir.xyz), 0.0);
-  var col = in.color * lit;
+  // three.js semantics: texture sample x factor x vertex colour (all linear)
+  let base = tex.rgb * prim.base_color.rgb * in.color;
+  let metallic = prim.material.x;
+  let shininess = prim.material.y;
+  let n_key = max(dot(n, mesh.key_dir.xyz), 0.0);
+  let n_rim = max(dot(n, mesh.rim_dir.xyz), 0.0);
+  // Diffuse (ambient included) loses energy as metalness rises — metals
+  // reflect through the specular lobe instead of double-brightening.
+  let lit = (mesh.ambient.rgb
+    + mesh.key_color.rgb * n_key
+    + mesh.rim_color.rgb * n_rim) * (1.0 - metallic * 0.7);
+  var col = base * lit;
+  // Blinn-Phong on the two directional lights only (ambient stays diffuse).
+  let v = normalize(-in.view_pos);
+  let spec_color = mix(vec3<f32>(0.04), base, metallic);
+  let s_key = pow(max(dot(n, normalize(mesh.key_dir.xyz + v)), 0.0), shininess)
+    * select(0.0, 1.0, n_key > 0.0);
+  let s_rim = pow(max(dot(n, normalize(mesh.rim_dir.xyz + v)), 0.0), shininess)
+    * select(0.0, 1.0, n_rim > 0.0);
+  col += (mesh.key_color.rgb * s_key + mesh.rim_color.rgb * s_rim) * spec_color;
+  // fog mixes in linear, like THREE, before the output encode
   let denom = max(mesh.fog_range.y - mesh.fog_range.x, 0.0001);
-  let f = clamp((in.view_depth - mesh.fog_range.x) / denom, 0.0, 1.0) * mesh.fog_color.w;
+  let f = clamp((-in.view_pos.z - mesh.fog_range.x) / denom, 0.0, 1.0) * mesh.fog_color.w;
   col = mix(col, mesh.fog_color.rgb, f);
   // alpha 1 = coverage; the cleared background stays transparent
-  return vec4<f32>(min(col, vec3<f32>(1.0)), 1.0);
+  return vec4<f32>(min(encode_srgb(max(col, vec3<f32>(0.0))), vec3<f32>(1.0)), 1.0);
 }

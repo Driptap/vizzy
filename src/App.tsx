@@ -54,6 +54,20 @@ export default function App() {
       .catch((err) => console.error('[Vizzy] Texture share failed:', err));
   }, [engineRef, syphonOn]);
 
+  // Master glow (bloom) also lives in the render core; same mirror pattern.
+  const [glowOn, setGlowOn] = useState(false);
+  useEffect(() => {
+    engineRef.current?.onGlow(setGlowOn);
+  }, [engineRef]);
+  const handleToggleGlow = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    void engine
+      .setGlow(!glowOn)
+      .then(setGlowOn)
+      .catch((err) => console.error('[Vizzy] Glow toggle failed:', err));
+  }, [engineRef, glowOn]);
+
   const handleMidiControl = useCallback(
     (controlId: string, value: number) => {
       if (controlId === 'xfade') {
@@ -123,6 +137,8 @@ export default function App() {
         onToggleMaster={master.handleToggleMaster}
         syphonOn={syphonOn}
         onToggleSyphon={handleToggleSyphon}
+        glowOn={glowOn}
+        onToggleGlow={handleToggleGlow}
         audioActive={audio.audioActive}
         audioDevices={audio.audioDevices}
         selectedDevice={audio.selectedDevice}

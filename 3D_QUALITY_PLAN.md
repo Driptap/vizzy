@@ -19,8 +19,11 @@ the Electron build:
    canvas blit to ~30 fps base64-JPEG events, which reads as "performance
    got worse" even though the master output runs at full rate.
 
-Three workstreams, instrumentation first — the shader fixes must be driven by
-the real failure corpus, not guesses.
+Three workstreams. **Scope decisions (2026-06-12):** the operator is gathering
+the shader-failure evidence by hand, so Workstream A waits for that corpus
+before any compile-path change; Workstream C1 (monitor IPC) is deferred — the
+current monitor feel is acceptable for now. Workstream B runs first, stretch
+goals included.
 
 ---
 

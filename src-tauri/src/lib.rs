@@ -31,6 +31,7 @@ pub fn run() {
             render::engine::render_stage_landscape,
             render::engine::render_stage_scene,
             render::engine::render_texture_share,
+            render::engine::render_glow,
             render::window::render_master,
             render::window::render_master_fullscreen,
         ])

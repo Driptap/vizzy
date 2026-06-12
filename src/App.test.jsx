@@ -30,6 +30,8 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.closeMaster = vi.fn(async () => false);
       this.onTextureShare = vi.fn();
       this.setTextureShare = vi.fn(async (on) => on);
+      this.onGlow = vi.fn();
+      this.setGlow = vi.fn(async (on) => on);
       this.stageShader = vi.fn(async () => ({ ok: true }));
       this.stageSpriteFromPath = vi.fn(async () => ({ ok: true }));
       this.stageModelFromPath = vi.fn(async () => ({ ok: true }));

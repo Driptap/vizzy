@@ -115,6 +115,7 @@ export class NativeRenderEngine {
   private unlistens: UnlistenFn[] = [];
   private masterClosedCbs: Array<() => void> = [];
   private textureShareCbs: Array<(on: boolean) => void> = [];
+  private glowCbs: Array<(on: boolean) => void> = [];
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(viewCanvases: ViewCanvases, previewCanvases: (HTMLCanvasElement | null)[]) {
@@ -152,6 +153,11 @@ export class NativeRenderEngine {
     add(
       listen<{ on: boolean }>('vizzy://texture-share', (e) => {
         this.textureShareCbs.forEach((cb) => cb(e.payload.on));
+      }),
+    );
+    add(
+      listen<{ on: boolean }>('vizzy://glow', (e) => {
+        this.glowCbs.forEach((cb) => cb(e.payload.on));
       }),
     );
   }
@@ -440,6 +446,18 @@ export class NativeRenderEngine {
     this.textureShareCbs.push(cb);
   }
 
+  // ---- master glow (bloom) ----
+
+  /** Toggle the bloom post chain on the master output. Resolves to the
+   *  resulting glow state. */
+  async setGlow(on: boolean): Promise<boolean> {
+    return invoke<boolean>('render_glow', { on });
+  }
+
+  onGlow(cb: (on: boolean) => void): void {
+    this.glowCbs.push(cb);
+  }
+
   dispose(): void {
     this.running = false;
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
@@ -448,6 +466,7 @@ export class NativeRenderEngine {
     this.unlistens = [];
     this.masterClosedCbs = [];
     this.textureShareCbs = [];
+    this.glowCbs = [];
   }
 }
 
