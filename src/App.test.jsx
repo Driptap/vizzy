@@ -14,6 +14,7 @@ vi.mock('./engine/RenderEngine', () => {
       this.setOpacity = vi.fn();
       this.setScale = vi.fn();
       this.setSize = vi.fn();
+      this.setPosition = vi.fn();
       this.setChannelFx = vi.fn();
       this.setAudioRouting = vi.fn();
       this.setAutomation = vi.fn();
@@ -23,6 +24,7 @@ vi.mock('./engine/RenderEngine', () => {
       this.stageShader = vi.fn(() => ({ ok: true }));
       this.stageSprite = vi.fn(() => ({ ok: true }));
       this.stageModel = vi.fn(async () => ({ ok: true }));
+      this.stageLandscape = vi.fn(async () => ({ ok: true }));
       this.getShaderBody = vi.fn(() => 'void main() {}');
       this.getChannelSource = vi.fn(() => ({ type: 'shader', code: null }));
       this.getPreviewDataURL = vi.fn(() => 'data:image/jpeg;preview');
@@ -340,6 +342,70 @@ describe('mixer-to-engine sync', () => {
   });
 });
 
+describe('channel position', () => {
+  it('POS knobs on a landscape deck reach the engine for the cued slot', async () => {
+    const terrain = { id: 'model-9', kind: 'model', file: 't.stl', createdAt: 1 };
+    listShaders.mockResolvedValueOnce([terrain]);
+    loadSession.mockResolvedValueOnce({
+      version: 1,
+      crossfade: 0,
+      cueScene: 0,
+      slots: [{ source: { type: 'landscape', modelId: 'model-9' } }],
+    });
+    await renderApp();
+    await waitFor(() => expect(engine().stageLandscape).toHaveBeenCalled());
+
+    engine().setPosition.mockClear();
+    fireEvent.wheel(screen.getByRole('slider', { name: 'POS X' }), { deltaY: -1 });
+    await waitFor(() => expect(engine().setPosition).toHaveBeenCalledWith(0, 4 / 50, 0));
+
+    // RESET returns the offset to center
+    engine().setPosition.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
+    await waitFor(() => expect(engine().setPosition).toHaveBeenCalledWith(0, 0, 0));
+  });
+});
+
+describe('channel reset', () => {
+  it('resets the cued channel knobs to defaults but leaves the rest alone', async () => {
+    await renderApp();
+    // detune channel 2 of scene A (slot 1)
+    const tilt = screen.getAllByRole('slider', { name: 'TILT' })[1];
+    fireEvent.wheel(tilt, { deltaY: -1 });
+    const scale = screen.getAllByRole('slider', { name: 'SCALE' })[1];
+    fireEvent.wheel(scale, { deltaY: -1 });
+    await waitFor(() => expect(engine().setScale).toHaveBeenCalledWith(1, expect.not.closeTo(1)));
+
+    engine().setScale.mockClear();
+    engine().setChannelFx.mockClear();
+    engine().setSize.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[1]);
+
+    await waitFor(() => expect(engine().setScale).toHaveBeenCalledWith(1, 1));
+    expect(engine().setSize).toHaveBeenCalledWith(1, 1, 1);
+    expect(engine().setChannelFx).toHaveBeenCalledWith(1, 0, 1, 0, 1);
+  });
+
+  it('reset on scene B targets slots 4-7', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'CUE B' }));
+    const scale = screen.getAllByRole('slider', { name: 'SCALE' })[0];
+    fireEvent.wheel(scale, { deltaY: -1 });
+
+    engine().setScale.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
+    await waitFor(() => expect(engine().setScale).toHaveBeenCalledWith(4, 1));
+  });
+
+  it('reset leaves the prompt and the staged source alone', async () => {
+    await renderApp();
+    fireEvent.change(deckPrompt(0), { target: { value: 'keep me' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
+    expect(deckPrompt(0)).toHaveValue('keep me');
+    expect(engine().stageShader).not.toHaveBeenCalled();
+  });
+});
+
 describe('MIDI control routing', () => {
   it('maps bound controls onto crossfade and channel faders', async () => {
     await renderApp();
@@ -390,6 +456,25 @@ describe('session restore', () => {
     expect(screen.getByRole('slider', { name: 'Scene crossfader' })).toHaveValue('0.5');
     expect(screen.getByRole('slider', { name: 'A1 opacity' })).toHaveValue('0.4');
     await waitFor(() => expect(engine().setScale).toHaveBeenCalledWith(0, 1.5));
+  });
+});
+
+describe('landscape restore', () => {
+  it('a saved landscape slot restores through stageLandscape, not stageModel', async () => {
+    const terrain = { id: 'model-9', kind: 'model', file: 't.stl', createdAt: 1 };
+    listShaders.mockResolvedValueOnce([terrain]);
+    loadSession.mockResolvedValueOnce({
+      version: 1,
+      crossfade: 0,
+      cueScene: 0,
+      slots: [{ source: { type: 'landscape', modelId: 'model-9' }, opacity: 1 }],
+    });
+    await renderApp();
+
+    await waitFor(() =>
+      expect(engine().stageLandscape).toHaveBeenCalledWith(0, { kind: 'object3d' }, 'model-9'),
+    );
+    expect(engine().stageModel).not.toHaveBeenCalled();
   });
 });
 

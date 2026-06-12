@@ -1,7 +1,7 @@
 // Internal engine structures shared between RenderEngine and its helpers.
 import type * as THREE from 'three';
 
-export type DeckMode = 'shader' | 'model' | 'sprite';
+export type DeckMode = 'shader' | 'model' | 'sprite' | 'landscape';
 
 /** A staged 3D model: normalized, lit, slowly rotating. */
 export interface ModelDeckContent {
@@ -24,7 +24,23 @@ export interface SpriteDeckContent {
   spin: number;
 }
 
-/** One of the 8 deck slots: a shader quad, or swapped model/sprite content. */
+/**
+ * A mesh staged as fly-over terrain: two mirrored copies of the model
+ * leapfrog toward a low camera for a seamless infinite scroll.
+ */
+export interface LandscapeDeckContent {
+  scene: THREE.Scene;
+  tiles: [THREE.Group, THREE.Group];
+  camera: THREE.PerspectiveCamera;
+  modelId: string;
+  /** tile depth in world units — the scroll wraps on this period */
+  span: number;
+  /** camera height above the terrain ground plane */
+  camHeight: number;
+  scroll: number;
+}
+
+/** One of the 8 deck slots: a shader quad, or swapped model/sprite/landscape content. */
 export interface Deck {
   scene: THREE.Scene;
   mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
@@ -33,6 +49,7 @@ export interface Deck {
   mode: DeckMode;
   model: ModelDeckContent | null;
   sprite: SpriteDeckContent | null;
+  landscape: LandscapeDeckContent | null;
 }
 
 /** Per-slot composite uniforms, shared by reference across composite passes. */
@@ -42,6 +59,15 @@ export interface SlotUniforms {
   scale: THREE.IUniform<number>;
   size: THREE.IUniform<THREE.Vector2>;
   fx: THREE.IUniform<THREE.Vector4>;
+  /** x = AUT sine-warp amount, y = AUT shear — engine-driven, 0 when idle */
+  warp: THREE.IUniform<THREE.Vector2>;
+}
+
+/** The knob-set composite params AUT modulates around (never overwritten). */
+export interface SlotBaseParams {
+  mix: number;
+  scale: number;
+  fx: THREE.Vector4;
 }
 
 export interface DeckAudioUniforms {

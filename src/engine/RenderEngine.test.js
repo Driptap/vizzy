@@ -35,6 +35,7 @@ vi.mock('three', () => {
       fn(this);
       this.children.forEach((c) => c.traverse(fn));
     }
+    clone() { return new this.constructor(); }
   }
   class Scene extends Object3D {}
   class Group extends Object3D {}
@@ -95,6 +96,10 @@ vi.mock('three', () => {
     lookAt() {}
   }
   class Box3 {
+    constructor() {
+      this.min = new Vector3(-1, -1, -1);
+      this.max = new Vector3(1, 1, 1);
+    }
     setFromObject() { return this; }
     getSize(v) { return v.set(2, 2, 2); }
     getCenter(v) { return v.set(0, 0, 0); }
@@ -116,8 +121,16 @@ vi.mock('three', () => {
     AmbientLight: Light,
     DirectionalLight: Light,
     Box3,
-    Clock: class Clock { getElapsedTime() { return 0; } },
+    Clock: class Clock {
+      constructor() { this.t = 0; }
+      // advances a fake 16ms per frame so loop dt is non-zero
+      getElapsedTime() { this.t += 0.016; return this.t; }
+    },
+    Fog: class Fog {
+      constructor(color, near, far) { Object.assign(this, { color, near, far }); }
+    },
     MirroredRepeatWrapping: 'mirror',
+    DoubleSide: 'double-side',
   };
 });
 
@@ -327,6 +340,137 @@ describe('stageModel', () => {
     const result = await engine.stageModel(6, await makeObject(), 'model-3');
     expect(result).toEqual({ ok: true });
     expect(engine.decks[6].mode).toBe('model');
+  });
+});
+
+describe('shader-deck composite automation', () => {
+  const loudAudio = { update: () => ({ low: 1, mid: 1, high: 1, level: 1 }) };
+
+  it('the loop modulates a shader deck around its knob-set base values', () => {
+    const engine = makeEngine({ audio: loudAudio });
+    engine.setScale(0, 2);
+    engine.setChannelFx(0, 0.5, 1, 0, 1);
+    engine.setAutomation(0, {
+      scl: { amt: 1, audio: true },
+      rot: { amt: 1, audio: true },
+      flk: { amt: 0, audio: false },
+      dst: { amt: 1, audio: true },
+      skw: { amt: 1, audio: true },
+    });
+
+    engine.loop();
+    engine.loop(); // dt > 0 from the second frame on
+
+    const slot = engine.slotUniforms[0];
+    expect(slot.scale.value).toBeCloseTo(2 * 1.4); // SCL pulse on base scale
+    expect(slot.fx.value.x).toBeGreaterThan(0.5); // ROT spin on top of TILT
+    expect(slot.warp.value.x).toBeCloseTo(1); // DST
+    expect(slot.warp.value.y).toBeCloseTo(0.7); // SKW
+    // base survives untouched: re-sync from React lands on the knob values
+    expect(engine.baseParams[0].scale).toBe(2);
+    expect(engine.baseParams[0].fx.x).toBeCloseTo(0.5);
+  });
+
+  it('idle automation leaves the uniforms at their base values', () => {
+    const engine = makeEngine({ audio: loudAudio });
+    engine.setScale(0, 2);
+    engine.setOpacity(0, 0.6);
+    engine.loop();
+    const slot = engine.slotUniforms[0];
+    expect(slot.scale.value).toBe(2);
+    expect(slot.mix.value).toBe(0.6);
+    expect(slot.warp.value).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('non-shader decks keep composite params pinned to base (no double automation)', async () => {
+    const engine = makeEngine({ audio: loudAudio });
+    engine.stageSprite(1, { dispose: vi.fn() }, 1, 'sprite-1');
+    engine.setScale(1, 1.5);
+    engine.setAutomation(1, {
+      scl: { amt: 1, audio: true },
+      rot: { amt: 1, audio: true },
+      flk: { amt: 0, audio: false },
+      dst: { amt: 1, audio: true },
+      skw: { amt: 1, audio: true },
+    });
+
+    engine.loop();
+    engine.loop();
+
+    const slot = engine.slotUniforms[1];
+    expect(slot.scale.value).toBe(1.5); // sprite animates in-scene instead
+    expect(slot.warp.value).toMatchObject({ x: 0, y: 0 });
+    expect(engine.decks[1].sprite.mesh.scale.x).not.toBe(1); // in-scene AUT ran
+  });
+});
+
+describe('stageLandscape', () => {
+  const makeObject = async () => {
+    const { Group } = await import('three');
+    return new Group();
+  };
+
+  it('stages a mesh as fly-over terrain with two mirrored tiles', async () => {
+    const engine = makeEngine();
+    const result = await engine.stageLandscape(5, await makeObject(), 'model-7');
+
+    expect(result).toEqual({ ok: true });
+    expect(engine.decks[5].mode).toBe('landscape');
+    expect(engine.getChannelSource(5)).toEqual({ type: 'landscape', modelId: 'model-7' });
+
+    const landscape = engine.decks[5].landscape;
+    expect(landscape.tiles).toHaveLength(2);
+    // mirrored in z so the seam between the copies always lines up
+    expect(landscape.tiles[0].scale.z).toBeCloseTo(-landscape.tiles[1].scale.z);
+    expect(landscape.span).toBeGreaterThan(0);
+    expect(landscape.scene.fog).toBeTruthy();
+    expect(landscape.camera.position.y).toBeCloseTo(landscape.camHeight);
+  });
+
+  it('replaces a model on the same deck, and a shader stage clears it', async () => {
+    const engine = makeEngine();
+    await engine.stageModel(2, await makeObject(), 'model-1');
+    await engine.stageLandscape(2, await makeObject(), 'model-1');
+    expect(engine.decks[2].model).toBeNull();
+    expect(engine.getChannelSource(2)).toEqual({ type: 'landscape', modelId: 'model-1' });
+
+    engine.stageShader(2, 'void main() { gl_FragColor = vec4(1.0); }');
+    expect(engine.decks[2].landscape).toBeNull();
+    expect(engine.getChannelSource(2).type).toBe('shader');
+  });
+
+  it('the render loop scrolls the terrain and renders with the landscape camera', async () => {
+    const engine = makeEngine({ audio: { update: () => ({ low: 0, mid: 0, high: 0, level: 0.5 }) } });
+    await engine.stageLandscape(0, await makeObject(), 'm');
+    const landscape = engine.decks[0].landscape;
+    engine.renderer.render.mockClear();
+
+    engine.loop();
+    engine.loop(); // first loop establishes lastFrameTime; second has dt > 0
+    expect(landscape.scroll).toBeGreaterThan(0);
+    expect(engine.renderer.render).toHaveBeenCalledWith(landscape.scene, landscape.camera);
+  });
+
+  it('POS pans the landscape camera through the render loop', async () => {
+    const engine = makeEngine();
+    await engine.stageLandscape(0, await makeObject(), 'm');
+    engine.setPosition(0, 1.2, 0.8);
+    engine.loop();
+
+    const landscape = engine.decks[0].landscape;
+    expect(landscape.camera.position.x).toBeCloseTo(1.2, 0);
+    expect(landscape.camera.position.y).toBeGreaterThan(landscape.camHeight);
+  });
+
+  it('an aspect change updates the landscape camera projection', async () => {
+    const engine = makeEngine();
+    await engine.stageLandscape(0, await makeObject(), 'm');
+    const camera = engine.decks[0].landscape.camera;
+    camera.updateProjectionMatrix.mockClear();
+
+    for (let i = 0; i < 13; i += 1) engine.maybeResizeDecks(2.0);
+    expect(camera.aspect).toBe(2.0);
+    expect(camera.updateProjectionMatrix).toHaveBeenCalled();
   });
 });
 

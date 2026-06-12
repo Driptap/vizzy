@@ -14,7 +14,7 @@ export interface DeckUiState {
   error: string | null;
 }
 
-export type SourceType = 'shader' | 'model' | 'sprite';
+export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape';
 export type AudioBand = 'low' | 'mid' | 'high' | 'level';
 export interface AudioLevels {
   low: number;
@@ -44,6 +44,12 @@ export interface ChannelSize {
   y: number;
 }
 
+/** In-scene content offset (landscape camera pan/height, model/sprite shift). */
+export interface ChannelPos {
+  x: number;
+  y: number;
+}
+
 /** The full per-channel config carried by deck presets and session slots. */
 export interface ChannelConfig {
   prompt: string;
@@ -51,6 +57,7 @@ export interface ChannelConfig {
   muted: boolean;
   scale: number;
   size: ChannelSize;
+  pos: ChannelPos;
   fx: ChannelFx;
   aut: AutomationMap;
 }
@@ -93,6 +100,8 @@ export type DeckChannelConfig = Partial<ChannelConfig> & {
   shaderId?: string;
   modelId?: string;
   spriteId?: string;
+  /** a model entry staged in landscape mode (fly-over terrain) */
+  landscapeId?: string;
 };
 
 // ---- engine channel sources & staging ----
@@ -101,13 +110,15 @@ export type DeckChannelConfig = Partial<ChannelConfig> & {
 export type ChannelSource =
   | { type: 'shader'; code: string | null }
   | { type: 'model'; modelId: string }
-  | { type: 'sprite'; spriteId: string };
+  | { type: 'sprite'; spriteId: string }
+  | { type: 'landscape'; modelId: string };
 
 /** A resolved, ready-to-stage source. */
 export type StageableSource =
   | { type: 'shader'; code: string }
   | { type: 'model'; entry: ModelEntry }
-  | { type: 'sprite'; entry: SpriteEntry };
+  | { type: 'sprite'; entry: SpriteEntry }
+  | { type: 'landscape'; entry: ModelEntry };
 
 export type StageResult = { ok: true } | { ok: false; error: string };
 

@@ -5,6 +5,7 @@ import type {
   AutEffectKey,
   AutomationMap,
   ChannelFx,
+  ChannelPos,
   ChannelSize,
   DeckStatus,
   SourceType,
@@ -22,7 +23,7 @@ const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = 
 
 const BUSY_STATUSES: DeckStatus[] = ['queued', 'generating', 'compiling'];
 
-const TABS = ['XFRM', 'AUDIO', 'COLOR'];
+const TABS = ['XFRM', 'AUDIO', 'COLOR', 'AUT'];
 
 const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'scl', label: 'SCL', title: 'Scaling' },
@@ -50,9 +51,12 @@ interface DeckModuleProps {
   onScaleChange: (channel: number, value: number) => void;
   size: ChannelSize;
   onSizeChange: (channel: number, axis: 'x' | 'y', value: number) => void;
+  /** in-scene offset — landscape camera pan/height, model/sprite shift */
+  pos: ChannelPos;
+  onPosChange: (channel: number, axis: 'x' | 'y', value: number) => void;
+  sourceType: SourceType;
   fx: ChannelFx;
   onFxChange: <K extends keyof ChannelFx>(channel: number, key: K, value: ChannelFx[K]) => void;
-  sourceType: SourceType;
   aut: AutomationMap;
   onAutChange: (
     channel: number,
@@ -63,6 +67,7 @@ interface DeckModuleProps {
   onGenerate: (channel: number, prompt: string) => void;
   onRegenerate: (channel: number, prompt: string) => void;
   onSave: (channel: number) => void | Promise<void>;
+  onReset: (channel: number) => void;
   previewRef: (el: HTMLCanvasElement | null) => void;
 }
 
@@ -77,14 +82,17 @@ export function DeckModule({
   onScaleChange,
   size,
   onSizeChange,
+  pos,
+  onPosChange,
+  sourceType,
   fx,
   onFxChange,
-  sourceType,
   aut,
   onAutChange,
   onGenerate,
   onRegenerate,
   onSave,
+  onReset,
   previewRef,
 }: DeckModuleProps) {
   const [saved, setSaved] = useState(false);
@@ -108,9 +116,6 @@ export function DeckModule({
   const badge = STATUS_STYLES[status] || STATUS_STYLES.idle;
   const busy = BUSY_STATUSES.includes(status);
 
-  // AUT (automation) exists for sprite and 3D-model channels
-  const tabs = sourceType === 'sprite' || sourceType === 'model' ? [...TABS, 'AUT'] : TABS;
-  const effectiveTab = tabs.includes(tab) ? tab : 'XFRM';
 
   const generate = () => {
     if (prompt.trim() && !busy) onGenerate(index, prompt.trim());
@@ -133,6 +138,14 @@ export function DeckModule({
           </span>
         </span>
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onReset(index)}
+            title="Reset scale, size, color and automation to defaults (keeps the visual)"
+            className="rounded border border-neutral-700 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-neutral-400 transition-colors hover:border-amber-500 hover:text-amber-300"
+          >
+            RESET
+          </button>
           <button
             type="button"
             onClick={save}
@@ -229,13 +242,13 @@ export function DeckModule({
       </div>
 
       <div className="flex gap-1">
-        {tabs.map((t) => (
+        {TABS.map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
             className={`rounded px-2 py-0.5 text-[9px] font-bold tracking-wider transition-colors ${
-              effectiveTab === t
+              tab === t
                 ? 'bg-neutral-700 text-cyan-300'
                 : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
             }`}
@@ -246,7 +259,7 @@ export function DeckModule({
       </div>
 
       <div className="flex h-20 items-center justify-evenly">
-        {effectiveTab === 'XFRM' && (
+        {tab === 'XFRM' && (
           <>
             <Knob
               label="SCALE"
@@ -267,10 +280,34 @@ export function DeckModule({
               format={(v) => `${Math.round(v)}°`}
               onChange={(v) => onFxChange(index, 'tilt', v)}
             />
+            {sourceType !== 'shader' && (
+              <>
+                <Knob
+                  label="POS X"
+                  value={pos.x}
+                  min={-2}
+                  max={2}
+                  defaultValue={0}
+                  bipolar
+                  format={(v) => v.toFixed(1)}
+                  onChange={(v) => onPosChange(index, 'x', v)}
+                />
+                <Knob
+                  label="POS Y"
+                  value={pos.y}
+                  min={-2}
+                  max={2}
+                  defaultValue={0}
+                  bipolar
+                  format={(v) => v.toFixed(1)}
+                  onChange={(v) => onPosChange(index, 'y', v)}
+                />
+              </>
+            )}
           </>
         )}
 
-        {effectiveTab === 'AUDIO' && (
+        {tab === 'AUDIO' && (
           <>
             <div className="flex flex-col items-center gap-1">
               <div className="flex overflow-hidden rounded border border-neutral-700">
@@ -304,7 +341,7 @@ export function DeckModule({
           </>
         )}
 
-        {effectiveTab === 'COLOR' && (
+        {tab === 'COLOR' && (
           <>
             <Knob
               label="CON"
@@ -337,7 +374,7 @@ export function DeckModule({
           </>
         )}
 
-        {effectiveTab === 'AUT' &&
+        {tab === 'AUT' &&
           AUT_EFFECTS.map(({ key, label, title }) => (
             <div key={key} className="flex flex-col items-center gap-1">
               <Knob

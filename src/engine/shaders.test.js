@@ -55,6 +55,7 @@ describe('composite shaders', () => {
     for (let i = 1; i <= 8; i += 1) {
       expect(COMPOSITE_FRAGMENT).toContain(`u_deck${i}`);
       expect(COMPOSITE_FRAGMENT).toContain(`u_fx${i}`);
+      expect(COMPOSITE_FRAGMENT).toContain(`u_warp${i}`);
     }
     expect(COMPOSITE_FRAGMENT).toContain('u_xfade');
   });

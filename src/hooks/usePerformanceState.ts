@@ -11,6 +11,7 @@ import type {
   AutEffectKey,
   AutomationMap,
   ChannelFx,
+  ChannelPos,
   ChannelSize,
   DeckChannelConfig,
   DeckStatus,
@@ -33,6 +34,9 @@ export function usePerformanceState() {
   const [scales, setScales] = useState<number[]>(() => Array(SLOTS).fill(1));
   const [sizes, setSizes] = useState<ChannelSize[]>(() =>
     Array.from({ length: SLOTS }, () => ({ x: 1, y: 1 })),
+  );
+  const [positions, setPositions] = useState<ChannelPos[]>(() =>
+    Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 })),
   );
   const [fx, setFx] = useState<ChannelFx[]>(() =>
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })),
@@ -73,6 +77,10 @@ export function usePerformanceState() {
     setSizes((prev) => prev.map((s, i) => (i === slot ? { ...s, [axis]: value } : s)));
   }, []);
 
+  const applyPos = useCallback((slot: number, axis: 'x' | 'y', value: number) => {
+    setPositions((prev) => prev.map((p, i) => (i === slot ? { ...p, [axis]: value } : p)));
+  }, []);
+
   const applyCrossfade = useCallback((value: number) => {
     setCrossfade(value);
   }, []);
@@ -99,6 +107,16 @@ export function usePerformanceState() {
     setSourceTypes((prev) => prev.map((s, i) => (i === slot ? type : s)));
   }, []);
 
+  // Back to neutral knobs — scale, footprint, fx and automation — while the
+  // staged visual, the prompt and the mixer fader/mute stay put.
+  const resetChannelConfig = useCallback((slot: number) => {
+    setScales((prev) => prev.map((v, i) => (i === slot ? 1 : v)));
+    setSizes((prev) => prev.map((v, i) => (i === slot ? { x: 1, y: 1 } : v)));
+    setPositions((prev) => prev.map((v, i) => (i === slot ? { x: 0, y: 0 } : v)));
+    setFx((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FX } : v)));
+    setAut((prev) => prev.map((v, i) => (i === slot ? makeDefaultAut() : v)));
+  }, []);
+
   // Overlay a deck preset's channel configs onto one scene's slots; fields a
   // config doesn't carry keep their current value.
   const applyChannelConfigs = useCallback((scene: number, channels: DeckChannelConfig[]) => {
@@ -112,6 +130,7 @@ export function usePerformanceState() {
     setMuted((prev) => forScene(prev, (c, v) => c.muted ?? v));
     setScales((prev) => forScene(prev, (c, v) => c.scale ?? v));
     setSizes((prev) => forScene(prev, (c, v) => (c.size ? { ...c.size } : v)));
+    setPositions((prev) => forScene(prev, (c, v) => (c.pos ? { ...c.pos } : v)));
     setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
     setAut((prev) =>
       forScene(prev, (c, v) =>
@@ -136,6 +155,7 @@ export function usePerformanceState() {
     setMuted(perSlot((s) => Boolean(s.muted), () => false));
     setScales(perSlot((s) => s.scale ?? 1, () => 1));
     setSizes(perSlot((s) => ({ x: 1, y: 1, ...(s.size || {}) }), () => ({ x: 1, y: 1 })));
+    setPositions(perSlot((s) => ({ x: 0, y: 0, ...(s.pos || {}) }), () => ({ x: 0, y: 0 })));
     setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
     setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
     setCrossfade(session.crossfade ?? 0);
@@ -149,6 +169,7 @@ export function usePerformanceState() {
     muted,
     scales,
     sizes,
+    positions,
     fx,
     aut,
     sourceTypes,
@@ -161,10 +182,12 @@ export function usePerformanceState() {
     toggleMute,
     applyScale,
     applySize,
+    applyPos,
     applyCrossfade,
     applyFx,
     applyAut,
     setSourceType,
+    resetChannelConfig,
     applyChannelConfigs,
     restoreFromSession,
   };

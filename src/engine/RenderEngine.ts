@@ -11,16 +11,24 @@ import {
 } from './shaders';
 import { CHANNELS, SCENES, INITIAL_OPACITIES, makeDefaultAut } from '../lib/channels';
 import { validateFragmentSource } from './glValidate';
-import { animateModelDeck, animateSpriteDeck } from './automation';
+import {
+  animateLandscapeDeck,
+  animateModelDeck,
+  animateShaderComposite,
+  animateSpriteDeck,
+  resetShaderComposite,
+} from './automation';
 import { makeCompositeScene, sceneUniformSet, masterUniformSet } from './compositor';
 import { flipAndPremultiply } from './preview';
-import type { AudioBand, AutomationMap, ChannelSource, StageResult } from '../types';
-import type { BlitView, Deck, DeckAudioUniforms, SlotUniforms } from './types';
+import type { AudioBand, AutomationMap, ChannelPos, ChannelSource, StageResult } from '../types';
+import type { BlitView, Deck, DeckAudioUniforms, SlotBaseParams, SlotUniforms } from './types';
 import type { AudioEngine } from './AudioEngine';
 
 export { CHANNELS, SCENES };
 
 const BASE_DECK_WIDTH = 960;
+// world width a landscape tile is normalized to (camera fly-over framing)
+const LANDSCAPE_WIDTH = 9;
 const BASE_PREVIEW_WIDTH = 160;
 const FALLBACK_ASPECT = 16 / 9;
 // frames the scene-view aspect must hold steady before deck targets are
@@ -61,6 +69,12 @@ export class RenderEngine {
   previewHeight: number;
   decks: Deck[];
   automation: AutomationMap[];
+  /** in-scene content offsets (landscape camera pan/height, model/sprite shift) */
+  positions: ChannelPos[];
+  /** knob-set composite params; AUT modulates the uniforms around these */
+  baseParams: SlotBaseParams[];
+  /** per-deck accumulated composite spin (shader-deck ROT automation) */
+  compositeSpin: { spin: number }[];
   modelCamera: THREE.PerspectiveCamera;
   slotUniforms: SlotUniforms[];
   xfadeUniform: THREE.IUniform<number>;
@@ -72,7 +86,9 @@ export class RenderEngine {
     u_scale: THREE.IUniform<number>;
     u_size: THREE.IUniform<THREE.Vector2>;
     u_fx: THREE.IUniform<THREE.Vector4>;
+    u_warp: THREE.IUniform<THREE.Vector2>;
     u_aspect: THREE.IUniform<number>;
+    u_time: THREE.IUniform<number>;
   };
   previewScene: THREE.Scene;
   cueScene: number;
@@ -179,11 +195,12 @@ export class RenderEngine {
       target.texture.wrapS = THREE.MirroredRepeatWrapping;
       target.texture.wrapT = THREE.MirroredRepeatWrapping;
 
-      return { scene, mesh, body, target, mode: 'shader' as const, model: null, sprite: null };
+      return { scene, mesh, body, target, mode: 'shader' as const, model: null, sprite: null, landscape: null };
     });
 
     this.spriteGeometry = new THREE.PlaneGeometry(1, 1);
     this.automation = DEFAULT_DECK_BODIES.map(() => makeDefaultAut());
+    this.positions = DEFAULT_DECK_BODIES.map(() => ({ x: 0, y: 0 }));
 
     this.modelCamera = new THREE.PerspectiveCamera(
       45,
@@ -203,20 +220,33 @@ export class RenderEngine {
       size: { value: new THREE.Vector2(1, 1) },
       // x = tilt (rad), y = contrast, z = hue (rad), w = saturation
       fx: { value: new THREE.Vector4(0, 1, 0, 1) },
+      // x = AUT sine-warp, y = AUT shear (engine-driven, zero at rest)
+      warp: { value: new THREE.Vector2(0, 0) },
     }));
+    this.baseParams = this.decks.map((_, i) => ({
+      mix: INITIAL_OPACITIES[i],
+      scale: 1,
+      fx: new THREE.Vector4(0, 1, 0, 1),
+    }));
+    this.compositeSpin = this.decks.map(() => ({ spin: 0 }));
     this.xfadeUniform = { value: 0 };
     this.aspectUniform = { value: this.deckWidth / this.deckHeight };
 
     this.sceneComposites = [0, 1].map((scene) =>
       makeCompositeScene(
         this.quadGeometry,
-        sceneUniformSet(this.slotUniforms, this.aspectUniform, scene),
+        sceneUniformSet(this.slotUniforms, this.aspectUniform, this.sharedUniforms.u_time, scene),
         SCENE_FRAGMENT,
       ),
     );
     this.masterComposite = makeCompositeScene(
       this.quadGeometry,
-      masterUniformSet(this.slotUniforms, this.aspectUniform, this.xfadeUniform),
+      masterUniformSet(
+        this.slotUniforms,
+        this.aspectUniform,
+        this.sharedUniforms.u_time,
+        this.xfadeUniform,
+      ),
       COMPOSITE_FRAGMENT,
     );
 
@@ -226,7 +256,9 @@ export class RenderEngine {
       u_scale: { value: 1 },
       u_size: { value: new THREE.Vector2(1, 1) },
       u_fx: { value: new THREE.Vector4(0, 1, 0, 1) },
+      u_warp: { value: new THREE.Vector2(0, 0) },
       u_aspect: this.aspectUniform,
+      u_time: this.sharedUniforms.u_time,
     };
     this.previewScene = makeCompositeScene(this.quadGeometry, this.previewUniforms, PREVIEW_FRAGMENT);
 
@@ -264,10 +296,12 @@ export class RenderEngine {
   }
 
   setOpacity(deckIndex: number, value: number): void {
+    this.baseParams[deckIndex].mix = value;
     this.slotUniforms[deckIndex].mix.value = value;
   }
 
   setScale(deckIndex: number, value: number): void {
+    this.baseParams[deckIndex].scale = value;
     this.slotUniforms[deckIndex].scale.value = value;
   }
 
@@ -281,6 +315,7 @@ export class RenderEngine {
 
   // tilt and hue in radians
   setChannelFx(deckIndex: number, tilt: number, contrast: number, hue: number, sat: number): void {
+    this.baseParams[deckIndex].fx.set(tilt, contrast, hue, sat);
     this.slotUniforms[deckIndex].fx.value.set(tilt, contrast, hue, sat);
   }
 
@@ -294,6 +329,10 @@ export class RenderEngine {
 
   setAutomation(deckIndex: number, aut: AutomationMap): void {
     this.automation[deckIndex] = aut;
+  }
+
+  setPosition(deckIndex: number, x: number, y: number): void {
+    this.positions[deckIndex] = { x, y };
   }
 
   // Attach/detach the master-out canvas (lives in a pop-out window; same
@@ -342,6 +381,7 @@ export class RenderEngine {
     deck.body = body;
     this.disposeModel(deck);
     this.disposeSprite(deck);
+    this.disposeLandscape(deck);
     deck.mode = 'shader';
     return { ok: true };
   }
@@ -355,6 +395,7 @@ export class RenderEngine {
     this.renderer.initTexture(texture);
     this.disposeModel(deck);
     this.disposeSprite(deck);
+    this.disposeLandscape(deck);
 
     const mesh = new THREE.Mesh(
       this.spriteGeometry,
@@ -451,14 +492,101 @@ export class RenderEngine {
     // ready — swap atomically (old model/sprite disposed only now)
     this.disposeModel(deck);
     this.disposeSprite(deck);
+    this.disposeLandscape(deck);
     deck.model = { scene, group, modelId, baseScale, spin: 0 };
     deck.mode = 'model';
     return { ok: true };
   }
 
-  disposeModel(deck: Deck): void {
-    if (!deck.model) return;
-    deck.model.scene.traverse((node) => {
+  // Put a mesh on a deck as fly-over terrain: laid out as a tile scrolling
+  // toward a low camera, duplicated and MIRRORED in z so the seam where the
+  // two copies meet always lines up (vaporwave landscape mode). Same
+  // precompile-then-swap discipline as stageModel.
+  async stageLandscape(
+    deckIndex: number,
+    object3D: THREE.Object3D,
+    modelId: string,
+  ): Promise<StageResult> {
+    const deck = this.decks[deckIndex];
+
+    const box = new THREE.Box3().setFromObject(object3D);
+    const sizeVec = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+
+    // normalize: widest horizontal axis -> LANDSCAPE_WIDTH, ground at y=0,
+    // centered on the camera's track
+    const widest = Math.max(sizeVec.x, sizeVec.z) || 1;
+    const scale = LANDSCAPE_WIDTH / widest;
+    object3D.position.set(-center.x, -box.min.y, -center.z);
+
+    // both copies render the same geometry — clone shares geometry/materials
+    const span = Math.max(sizeVec.z * scale, 1);
+    const height = Math.max(sizeVec.y * scale, 0.01);
+    const tiles: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+    tiles.forEach((tile, i) => {
+      const copy = i === 0 ? object3D : object3D.clone(true);
+      tile.add(copy);
+      tile.scale.set(scale, scale, i === 0 ? scale : -scale); // mirror seam-to-seam
+      tile.position.z = -i * span;
+    });
+    // mirrored z flips winding — render both faces so the mirror tile shows
+    object3D.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      materials.forEach((material) => {
+        material.side = THREE.DoubleSide;
+      });
+    });
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x000000, span * 0.3, span * 1.9);
+    tiles.forEach((tile) => scene.add(tile));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    const key = new THREE.DirectionalLight(0xe879f9, 1.4); // magenta sun
+    key.position.set(0, 2, -6);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x22d3ee, 0.9); // cyan rim
+    rim.position.set(3, 4, 2);
+    scene.add(rim);
+
+    const camHeight = height * 0.55 + 0.5;
+    const camera = new THREE.PerspectiveCamera(
+      64,
+      this.deckWidth / this.deckHeight,
+      0.05,
+      span * 2.5,
+    );
+    camera.position.set(0, camHeight, span * 0.45);
+    camera.lookAt(0, camHeight * 0.45, -6);
+
+    try {
+      if (this.renderer.compileAsync) {
+        await this.renderer.compileAsync(scene, camera);
+      }
+    } catch (err) {
+      console.warn('[Vizzy] Async shader compile failed, continuing:', err);
+    }
+    this.renderer.setRenderTarget(this.previewTarget);
+    this.renderer.render(scene, camera);
+    this.renderer.setRenderTarget(null);
+
+    this.disposeModel(deck);
+    this.disposeSprite(deck);
+    this.disposeLandscape(deck);
+    deck.landscape = { scene, tiles, camera, modelId, span, camHeight, scroll: 0 };
+    deck.mode = 'landscape';
+    return { ok: true };
+  }
+
+  disposeLandscape(deck: Deck): void {
+    if (!deck.landscape) return;
+    this.disposeObjectTree(deck.landscape.scene);
+    deck.landscape = null;
+  }
+
+  disposeObjectTree(root: THREE.Object3D): void {
+    root.traverse((node) => {
       const obj = node as THREE.Mesh;
       obj.geometry?.dispose?.();
       const materials = Array.isArray(obj.material)
@@ -473,6 +601,11 @@ export class RenderEngine {
         material.dispose();
       });
     });
+  }
+
+  disposeModel(deck: Deck): void {
+    if (!deck.model) return;
+    this.disposeObjectTree(deck.model.scene);
     deck.model = null;
   }
 
@@ -488,6 +621,9 @@ export class RenderEngine {
     }
     if (deck.mode === 'sprite' && deck.sprite) {
       return { type: 'sprite', spriteId: deck.sprite.spriteId };
+    }
+    if (deck.mode === 'landscape' && deck.landscape) {
+      return { type: 'landscape', modelId: deck.landscape.modelId };
     }
     return { type: 'shader', code: deck.body };
   }
@@ -545,7 +681,13 @@ export class RenderEngine {
     this.aspectUniform.value = this.deckWidth / this.deckHeight;
     this.modelCamera.aspect = this.aspectUniform.value;
     this.modelCamera.updateProjectionMatrix();
-    this.decks.forEach((deck) => this.updateSpriteLayout(deck));
+    this.decks.forEach((deck) => {
+      this.updateSpriteLayout(deck);
+      if (deck.landscape) {
+        deck.landscape.camera.aspect = this.aspectUniform.value;
+        deck.landscape.camera.updateProjectionMatrix();
+      }
+    });
 
     this.decks.forEach((deck) => {
       deck.target.setSize(this.deckWidth, this.deckHeight);
@@ -631,15 +773,37 @@ export class RenderEngine {
     const dt = Math.min(0.1, t - (this.lastFrameTime ?? t));
     this.lastFrameTime = t;
     this.decks.forEach((deck, i) => {
+      // Composite-stage automation: shader decks have no scene-graph, so AUT
+      // modulates their sampling params; everything else animates in-scene
+      // and keeps its composite params pinned to the knob values.
+      if (deck.mode === 'shader') {
+        const level = this.deckAudioUniforms[i].u_audio_level.value;
+        animateShaderComposite(
+          this.slotUniforms[i],
+          this.baseParams[i],
+          this.compositeSpin[i],
+          this.automation[i],
+          level,
+          t,
+          dt,
+        );
+      } else {
+        resetShaderComposite(this.slotUniforms[i], this.baseParams[i]);
+      }
+
       this.renderer.setRenderTarget(deck.target);
       if (deck.mode === 'model' && deck.model) {
         const level = this.deckAudioUniforms[i].u_audio_level.value;
-        animateModelDeck(deck.model, this.automation[i], level, t, dt);
+        animateModelDeck(deck.model, this.automation[i], level, t, dt, this.positions[i]);
         this.renderer.render(deck.model.scene, this.modelCamera);
       } else if (deck.mode === 'sprite' && deck.sprite) {
         const level = this.deckAudioUniforms[i].u_audio_level.value;
-        animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt);
+        animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt, this.positions[i]);
         this.renderer.render(deck.sprite.scene, this.camera);
+      } else if (deck.mode === 'landscape' && deck.landscape) {
+        const level = this.deckAudioUniforms[i].u_audio_level.value;
+        animateLandscapeDeck(deck.landscape, this.automation[i], level, t, dt, this.positions[i]);
+        this.renderer.render(deck.landscape.scene, deck.landscape.camera);
       } else {
         this.renderer.render(deck.scene, this.camera);
       }
@@ -668,6 +832,7 @@ export class RenderEngine {
     this.previewUniforms.u_scale.value = slotUniform.scale.value;
     this.previewUniforms.u_size.value.copy(slotUniform.size.value);
     this.previewUniforms.u_fx.value.copy(slotUniform.fx.value);
+    this.previewUniforms.u_warp.value.copy(slotUniform.warp.value);
 
     this.renderer.setRenderTarget(this.previewTarget);
     this.renderer.render(this.previewScene, this.camera);
@@ -693,6 +858,7 @@ export class RenderEngine {
       deck.target.dispose();
       this.disposeModel(deck);
       this.disposeSprite(deck);
+      this.disposeLandscape(deck);
     });
     this.spriteGeometry.dispose();
     this.previewTarget.dispose();

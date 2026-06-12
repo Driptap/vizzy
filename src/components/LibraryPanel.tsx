@@ -17,7 +17,8 @@ interface ContextMenu {
 }
 
 const MENU_WIDTH = 168;
-const MENU_HEIGHT = 200;
+// tallest menu (models: assign + landscape groups); used for edge clamping
+const MENU_HEIGHT = 330;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'shaders', label: 'SHDR' },
@@ -46,6 +47,7 @@ interface LibraryPanelProps {
   onAssignDeck: (entry: DeckEntry, scene: number) => void;
   onAddModels: (files: File[]) => void;
   onAssignModel: (entry: ModelEntry, channel: number) => void;
+  onAssignLandscape: (entry: ModelEntry, channel: number) => void;
   onAddSprites: (files: File[]) => void;
   onAssignSprite: (entry: SpriteEntry, channel: number) => void;
   onDelete: (entry: LibraryEntry) => void;
@@ -64,6 +66,7 @@ export function LibraryPanel({
   onAssignDeck,
   onAddModels,
   onAssignModel,
+  onAssignLandscape,
   onAddSprites,
   onAssignSprite,
   onDelete,
@@ -320,6 +323,26 @@ export function LibraryPanel({
                 {channel + 1}
               </button>
             ))}
+          {menu.kind === 'models' && (
+            <>
+              <div className="my-1 border-t border-neutral-800" />
+              {[0, 1, 2, 3].map((channel) => (
+                <button
+                  key={`landscape-${channel}`}
+                  type="button"
+                  onClick={() => {
+                    onAssignLandscape(menu.entry as ModelEntry, channel);
+                    setMenu(null);
+                  }}
+                  title="Fly-over terrain: the mesh scrolls under a low camera — layer sprites on another channel to fly over it"
+                  className="block w-full px-3 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800 hover:text-fuchsia-300"
+                >
+                  Landscape on {sceneLetter}
+                  {channel + 1}
+                </button>
+              ))}
+            </>
+          )}
           {menu.kind === 'decks' &&
             [0, 1].map((scene) => (
               <button

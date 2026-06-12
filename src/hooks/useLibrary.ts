@@ -54,6 +54,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     muted,
     scales,
     sizes,
+    positions,
     fx,
     aut,
     setDeckState,
@@ -168,6 +169,13 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     [stageOntoSlot, cueScene],
   );
 
+  // Same model entry, staged as fly-over terrain instead of a centered object.
+  const handleAssignLandscape = useCallback(
+    (entry: ModelEntry, channel: number) =>
+      stageOntoSlot(slotIndex(cueScene, channel), { type: 'landscape', entry }),
+    [stageOntoSlot, cueScene],
+  );
+
   // Save the cued scene as a deck preset. Channels whose shader code isn't in
   // the library yet get saved as (unnamed) shader entries first; the deck
   // references shaders by id and carries each channel's full config.
@@ -186,6 +194,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           muted: muted[slot],
           scale: scales[slot],
           size: { ...sizes[slot] },
+          pos: { ...positions[slot] },
           fx: { ...fx[slot] },
           aut: structuredClone(aut[slot]),
         };
@@ -194,6 +203,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           channels.push({ modelId: source.modelId, ...config });
         } else if (source.type === 'sprite') {
           channels.push({ spriteId: source.spriteId, ...config });
+        } else if (source.type === 'landscape') {
+          channels.push({ landscapeId: source.modelId, ...config });
         } else {
           let shaderEntry =
             library.find((e) => isShaderEntry(e) && e.code === source.code) ||
@@ -214,7 +225,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     } catch (err) {
       console.error('[Vizzy] Saving deck preset failed:', err);
     }
-  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, fx, aut]);
+  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, fx, aut]);
 
   // Load a deck preset into scene A or B: stage all 4 channels and restore
   // each channel's config; the engine sync effect pushes it down. Takes the
@@ -298,6 +309,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleAddSprites,
     handleAssignSprite,
     handleAssignModel,
+    handleAssignLandscape,
     handleAddToChannel,
     handleSaveDeckScene,
     handleAssignDeck,

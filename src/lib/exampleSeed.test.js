@@ -60,15 +60,15 @@ describe('dedupeExampleEntries', () => {
 });
 
 describe('seedExampleLibrary', () => {
-  it('creates 2 shaders, a sprite, a model and the deck preset', async () => {
+  it('creates 2 shaders, a sprite, 2 models and the deck preset', async () => {
     const { deck, entries } = await seedExampleLibrary();
 
     expect(saveShader).toHaveBeenCalledTimes(2);
-    expect(saveAssetFromBuffer).toHaveBeenCalledTimes(2);
+    expect(saveAssetFromBuffer).toHaveBeenCalledTimes(3); // star sprite, torus, vapor terrain
     expect(saveDeck).toHaveBeenCalledTimes(1);
 
     expect(deck.name).toBe(EXAMPLE_DECK_NAME);
-    expect(entries).toHaveLength(5);
+    expect(entries).toHaveLength(6);
     expect(entries[0]).toBe(deck); // newest-first, deck on top
   });
 
@@ -83,9 +83,10 @@ describe('seedExampleLibrary', () => {
         }, {});
 
     const [ch1, ch2, ch3, ch4] = deck.channels;
+    const torus = entries.find((e) => e.name === 'Example · Torus');
     expect(byKind.shader.map((e) => e.id)).toContain(ch1.shaderId);
     expect(byKind.sprite[0].id).toBe(ch2.spriteId);
-    expect(byKind.model[0].id).toBe(ch3.modelId);
+    expect(ch3.modelId).toBe(torus.id);
     expect(byKind.shader.map((e) => e.id)).toContain(ch4.shaderId);
     expect(ch1.shaderId).not.toBe(ch4.shaderId);
   });
@@ -104,13 +105,22 @@ describe('seedExampleLibrary', () => {
     expect(deck.channels[0].opacity).toBe(1);
   });
 
-  it('the seeded model is a valid binary STL torus', async () => {
+  it('the seeded torus and vapor terrain are valid binary STLs', async () => {
     await seedExampleLibrary();
-    const modelCall = saveAssetFromBuffer.mock.calls.find(([arg]) => arg.kind === 'model')[0];
-    expect(modelCall.ext).toBe('.stl');
-    const dv = new DataView(modelCall.bytes.buffer);
-    const triCount = dv.getUint32(80, true);
-    expect(modelCall.bytes.byteLength).toBe(84 + triCount * 50);
-    expect(triCount).toBe(48 * 24 * 2);
+    const stlCalls = saveAssetFromBuffer.mock.calls
+      .map(([arg]) => arg)
+      .filter((arg) => arg.kind === 'model');
+    expect(stlCalls.map((c) => c.name)).toEqual(['Example · Torus', 'Example · Vapor Terrain']);
+
+    stlCalls.forEach((call) => {
+      expect(call.ext).toBe('.stl');
+      const dv = new DataView(call.bytes.buffer);
+      const triCount = dv.getUint32(80, true);
+      expect(call.bytes.byteLength).toBe(84 + triCount * 50);
+    });
+
+    const [torus, terrain] = stlCalls;
+    expect(new DataView(torus.bytes.buffer).getUint32(80, true)).toBe(48 * 24 * 2);
+    expect(new DataView(terrain.bytes.buffer).getUint32(80, true)).toBe(56 * 42 * 2);
   });
 });

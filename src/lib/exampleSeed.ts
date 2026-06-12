@@ -12,6 +12,7 @@ const EXAMPLE_NAMES = new Set([
   'Example · Neon Rings',
   'Example · Neon Star',
   'Example · Torus',
+  'Example · Vapor Terrain',
 ]);
 
 /**
@@ -170,6 +171,47 @@ function makeTorusSTL(R = 1.0, r = 0.45, segU = 48, segV = 24): Uint8Array {
   return new Uint8Array(buf);
 }
 
+// Binary STL terrain tile for landscape mode: a sine-ridged heightfield with
+// a flat corridor down the middle so the fly-over camera has a canyon to run.
+function makeTerrainSTL(W = 48, D = 36, segX = 56, segZ = 42): Uint8Array {
+  const height = (x: number, z: number): number => {
+    const ridge = Math.abs(
+      Math.sin(x * 0.33 + Math.sin(z * 0.21) * 1.4) * Math.cos(z * 0.27 - x * 0.06),
+    );
+    const rolling = 0.5 + 0.5 * Math.sin(x * 0.11 + z * 0.17);
+    const valley = Math.min(1, Math.abs(x) / (W * 0.16)); // flat strip at x=0
+    return (ridge * 2.6 + rolling * 1.2) * valley * valley;
+  };
+  const point = (i: number, j: number): [number, number, number] => {
+    const x = (i / segX - 0.5) * W;
+    const z = (j / segZ) * D;
+    return [x, height(x, z), z];
+  };
+  const tris: [number, number, number][][] = [];
+  for (let i = 0; i < segX; i += 1) {
+    for (let j = 0; j < segZ; j += 1) {
+      const a = point(i, j);
+      const b = point(i + 1, j);
+      const c = point(i + 1, j + 1);
+      const d = point(i, j + 1);
+      tris.push([a, b, c], [a, c, d]);
+    }
+  }
+  const buf = new ArrayBuffer(84 + tris.length * 50);
+  const dv = new DataView(buf);
+  dv.setUint32(80, tris.length, true);
+  tris.forEach((tri, k) => {
+    let o = 84 + k * 50;
+    [[0, 0, 0] as [number, number, number], ...tri].forEach((vec) => {
+      dv.setFloat32(o, vec[0], true);
+      dv.setFloat32(o + 4, vec[1], true);
+      dv.setFloat32(o + 8, vec[2], true);
+      o += 12;
+    });
+  });
+  return new Uint8Array(buf);
+}
+
 /** Creates the example entries + deck preset; returns them newest-first. */
 export async function seedExampleLibrary(): Promise<{ deck: DeckEntry; entries: LibraryEntry[] }> {
   const plasma = await saveShader({
@@ -196,6 +238,14 @@ export async function seedExampleLibrary(): Promise<{ deck: DeckEntry; entries: 
     bytes: makeTorusSTL(),
     ext: '.stl',
     screenshot: gradientThumb('TORUS', '#0f172a', '#10b981'),
+  });
+  // right-click -> "Landscape on ..." stages this as fly-over terrain
+  const terrain = await saveAssetFromBuffer({
+    kind: 'model',
+    name: 'Example · Vapor Terrain',
+    bytes: makeTerrainSTL(),
+    ext: '.stl',
+    screenshot: gradientThumb('TERRAIN', '#2e1065', '#db2777'),
   });
 
   const channels: DeckChannelConfig[] = [
@@ -230,5 +280,5 @@ export async function seedExampleLibrary(): Promise<{ deck: DeckEntry; entries: 
     screenshot: gradientThumb('EXAMPLE DECK', '#155e75', '#701a75'),
   });
 
-  return { deck, entries: [deck, torus, sprite, rings, plasma] };
+  return { deck, entries: [deck, terrain, torus, sprite, rings, plasma] };
 }

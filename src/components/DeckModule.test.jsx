@@ -13,9 +13,11 @@ const defaultProps = () => ({
   onScaleChange: vi.fn(),
   size: { x: 1, y: 1 },
   onSizeChange: vi.fn(),
+  pos: { x: 0, y: 0 },
+  onPosChange: vi.fn(),
+  sourceType: 'shader',
   fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
   onFxChange: vi.fn(),
-  sourceType: 'shader',
   aut: Object.fromEntries(
     ['scl', 'rot', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]),
   ),
@@ -23,6 +25,7 @@ const defaultProps = () => ({
   onGenerate: vi.fn(),
   onRegenerate: vi.fn(),
   onSave: vi.fn(),
+  onReset: vi.fn(),
   previewRef: () => {},
 });
 
@@ -88,6 +91,16 @@ describe('DeckModule generation', () => {
     expect(screen.getByText('B4')).toBeInTheDocument();
   });
 
+  it('RESET reports the channel index and sits next to SAVE', () => {
+    const { onReset } = renderDeck({ index: 2 });
+    const reset = screen.getByRole('button', { name: 'RESET' });
+    fireEvent.click(reset);
+    expect(onReset).toHaveBeenCalledWith(2);
+    // header order: RESET then SAVE
+    const save = screen.getByRole('button', { name: 'SAVE' });
+    expect(reset.nextElementSibling).toBe(save);
+  });
+
   it('SAVE shows a confirmation tick', async () => {
     vi.useFakeTimers();
     try {
@@ -139,6 +152,17 @@ describe('DeckModule tabs', () => {
     expect(screen.getByRole('slider', { name: 'TILT' })).toBeInTheDocument();
   });
 
+  it('POS X/Y knobs appear for scene-based decks and report offsets', () => {
+    renderDeck();
+    expect(screen.queryByRole('slider', { name: 'POS X' })).not.toBeInTheDocument();
+
+    const { onPosChange } = renderDeck({ sourceType: 'landscape', index: 1 });
+    fireEvent.doubleClick(screen.getByRole('slider', { name: 'POS X' })); // reset to 0
+    expect(onPosChange).toHaveBeenCalledWith(1, 'x', 0);
+    fireEvent.wheel(screen.getByRole('slider', { name: 'POS Y' }), { deltaY: -1 });
+    expect(onPosChange).toHaveBeenCalledWith(1, 'y', 4 / 50); // 1/50 of the -2..2 range
+  });
+
   it('AUDIO tab routes the band and amount', () => {
     const { onFxChange } = renderDeck();
     fireEvent.click(screen.getByRole('button', { name: 'AUDIO' }));
@@ -155,15 +179,8 @@ describe('DeckModule tabs', () => {
     );
   });
 
-  it('AUT tab only exists for sprite and model channels', () => {
-    renderDeck();
-    expect(screen.queryByRole('button', { name: 'AUT' })).not.toBeInTheDocument();
-    cleanupAndRender({ sourceType: 'sprite' });
-    expect(screen.getByRole('button', { name: 'AUT' })).toBeInTheDocument();
-  });
-
   it('AUT knobs and audio-couple toggles report per-effect changes', () => {
-    const { onAutChange } = renderDeck({ sourceType: 'model' });
+    const { onAutChange } = renderDeck();
     fireEvent.click(screen.getByRole('button', { name: 'AUT' }));
     expect(screen.getByRole('slider', { name: 'ROT' })).toBeInTheDocument();
 
@@ -173,18 +190,8 @@ describe('DeckModule tabs', () => {
     expect(onAutChange).toHaveBeenCalledWith(0, 'rot', 'audio', true);
   });
 
-  it('falls back to XFRM when the source loses its AUT tab', () => {
-    const props = defaultProps();
-    const { rerender } = render(<DeckModule {...props} sourceType="sprite" />);
-    fireEvent.click(screen.getByRole('button', { name: 'AUT' }));
-    rerender(<DeckModule {...props} sourceType="shader" />);
-    expect(screen.getByRole('slider', { name: 'SCALE' })).toBeInTheDocument();
+  it('AUT tab is available on every deck (shader decks animate at the composite)', () => {
+    renderDeck();
+    expect(screen.getByRole('button', { name: 'AUT' })).toBeInTheDocument();
   });
 });
-
-// helper for the one test that needs a second mount in the same case
-function cleanupAndRender(overrides) {
-  const props = { ...defaultProps(), ...overrides };
-  render(<DeckModule {...props} />);
-  return props;
-}

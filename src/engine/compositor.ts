@@ -29,15 +29,17 @@ const slotEntries = (uniforms: UniformSet, slot: SlotUniforms, n: number): void 
   uniforms[`u_scale${n}`] = slot.scale;
   uniforms[`u_size${n}`] = slot.size;
   uniforms[`u_fx${n}`] = slot.fx;
+  uniforms[`u_warp${n}`] = slot.warp;
 };
 
 /** Uniform set for one scene's 4-deck composite (channels named 1-4). */
 export function sceneUniformSet(
   slotUniforms: SlotUniforms[],
   aspectUniform: THREE.IUniform<number>,
+  timeUniform: THREE.IUniform<number>,
   sceneIndex: number,
 ): UniformSet {
-  const uniforms: UniformSet = { u_aspect: aspectUniform };
+  const uniforms: UniformSet = { u_aspect: aspectUniform, u_time: timeUniform };
   for (let ch = 0; ch < CHANNELS; ch += 1) {
     slotEntries(uniforms, slotUniforms[sceneIndex * CHANNELS + ch], ch + 1);
   }
@@ -48,9 +50,14 @@ export function sceneUniformSet(
 export function masterUniformSet(
   slotUniforms: SlotUniforms[],
   aspectUniform: THREE.IUniform<number>,
+  timeUniform: THREE.IUniform<number>,
   xfadeUniform: THREE.IUniform<number>,
 ): UniformSet {
-  const uniforms: UniformSet = { u_xfade: xfadeUniform, u_aspect: aspectUniform };
+  const uniforms: UniformSet = {
+    u_xfade: xfadeUniform,
+    u_aspect: aspectUniform,
+    u_time: timeUniform,
+  };
   slotUniforms.forEach((slot, i) => slotEntries(uniforms, slot, i + 1));
   return uniforms;
 }

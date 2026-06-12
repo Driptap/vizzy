@@ -32,6 +32,7 @@ export const defaultChannelConfig = (): ChannelConfig => ({
   muted: false,
   scale: 1,
   size: { x: 1, y: 1 },
+  pos: { x: 0, y: 0 },
   fx: { ...DEFAULT_FX },
   aut: makeDefaultAut(),
 });

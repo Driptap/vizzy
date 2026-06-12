@@ -21,9 +21,13 @@ export async function stageSource(
   source: StageableSource,
 ): Promise<StageResult> {
   try {
-    if (source.type === 'model') {
+    if (source.type === 'model' || source.type === 'landscape') {
       const object = await loadModelObject(await getModelFilePath(source.entry));
-      await engine.stageModel(slot, object, source.entry.id);
+      if (source.type === 'landscape') {
+        await engine.stageLandscape(slot, object, source.entry.id);
+      } else {
+        await engine.stageModel(slot, object, source.entry.id);
+      }
       return { ok: true };
     }
     if (source.type === 'sprite') {
@@ -51,7 +55,25 @@ export function resolveSourceRef(
   ref: DeckChannelConfig | ChannelSource | Record<string, never>,
   byId: Map<string, LibraryEntry>,
 ): ResolveResult {
-  const anyRef = ref as { modelId?: string; spriteId?: string; shaderId?: string; type?: string; code?: string | null };
+  const anyRef = ref as {
+    modelId?: string;
+    spriteId?: string;
+    shaderId?: string;
+    landscapeId?: string;
+    type?: string;
+    code?: string | null;
+  };
+  // landscape refs reuse model entries: deck presets carry landscapeId, session
+  // sources carry {type: 'landscape', modelId} — both must resolve BEFORE the
+  // plain-model checks or a landscape would restore as a spinning model.
+  const landscapeModelId =
+    anyRef.landscapeId ?? (anyRef.type === 'landscape' ? anyRef.modelId : undefined);
+  if (landscapeModelId) {
+    const entry = byId.get(landscapeModelId);
+    return entry
+      ? { source: { type: 'landscape', entry: entry as ModelEntry } }
+      : { error: 'Saved landscape is missing from the library' };
+  }
   if (anyRef.modelId) {
     const entry = byId.get(anyRef.modelId);
     return entry

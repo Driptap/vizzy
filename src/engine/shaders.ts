@@ -52,6 +52,7 @@ export const DEFAULT_DECK_BODIES = [0.0, 1.6, 3.1, 4.7, 0.8, 2.4, 3.9, 5.5].map(
 // render as a solid colour wash.
 const DECK_SAMPLING = /* glsl */ `
 uniform float u_aspect;
+uniform float u_time;
 
 vec2 zoomUv(vec2 uv, float s) {
   return (uv - 0.5) / max(s, 0.001) + 0.5;
@@ -61,7 +62,9 @@ vec2 zoomUv(vec2 uv, float s) {
 // z = hue rotation (radians), w = saturation. The tilt rotates the content
 // inside its axis-aligned window, aspect-corrected so it spins instead of
 // shearing; hue rotates RGB about the grey axis (Rodrigues).
-vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx) {
+// warp carries the engine-driven AUT effects for shader decks: x = sine UV
+// distortion, y = shear — both zero when idle, so the fast path is unchanged.
+vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx, vec2 warp) {
   vec2 local = (uv - 0.5) / max(size, vec2(0.001)) + 0.5;
   vec2 inside = step(vec2(0.0), local) * step(local, vec2(1.0));
   float tc = cos(fx.x);
@@ -69,6 +72,11 @@ vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx) {
   vec2 q = (local - 0.5) * vec2(u_aspect, 1.0);
   q = mat2(tc, -ts, ts, tc) * q;
   local = q / vec2(u_aspect, 1.0) + 0.5;
+  local.x += warp.y * (local.y - 0.5);
+  local += warp.x * 0.06 * vec2(
+    sin(local.y * 12.0 + u_time * 5.0),
+    sin(local.x * 10.0 + u_time * 4.0)
+  );
   vec4 t = texture2D(tex, zoomUv(local, zoom));
   vec3 col = t.rgb * t.a;
   col = (col - 0.5) * fx.y + 0.5;
@@ -126,9 +134,10 @@ uniform sampler2D u_tex;
 uniform float u_scale;
 uniform vec2 u_size;
 uniform vec4 u_fx;
+uniform vec2 u_warp;
 ${DECK_SAMPLING}
 void main() {
-  gl_FragColor = vec4(deckColor(u_tex, vUv, u_scale, u_size, u_fx), 1.0);
+  gl_FragColor = vec4(deckColor(u_tex, vUv, u_scale, u_size, u_fx, u_warp), 1.0);
 }
 `;
 
@@ -156,12 +165,16 @@ uniform vec4 u_fx1;
 uniform vec4 u_fx2;
 uniform vec4 u_fx3;
 uniform vec4 u_fx4;
+uniform vec2 u_warp1;
+uniform vec2 u_warp2;
+uniform vec2 u_warp3;
+uniform vec2 u_warp4;
 ${DECK_SAMPLING}
 void main() {
-  vec3 c = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1) * u_mix1
-         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2) * u_mix2
-         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3) * u_mix3
-         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4) * u_mix4;
+  vec3 c = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1
+         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2
+         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3
+         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
   gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
 }
 `;
@@ -209,17 +222,25 @@ uniform vec4 u_fx5;
 uniform vec4 u_fx6;
 uniform vec4 u_fx7;
 uniform vec4 u_fx8;
+uniform vec2 u_warp1;
+uniform vec2 u_warp2;
+uniform vec2 u_warp3;
+uniform vec2 u_warp4;
+uniform vec2 u_warp5;
+uniform vec2 u_warp6;
+uniform vec2 u_warp7;
+uniform vec2 u_warp8;
 uniform float u_xfade; // 0.0 = scene A (decks 1-4), 1.0 = scene B (decks 5-8)
 ${DECK_SAMPLING}
 void main() {
-  vec3 a = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1) * u_mix1
-         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2) * u_mix2
-         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3) * u_mix3
-         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4) * u_mix4;
-  vec3 b = deckColor(u_deck5, vUv, u_scale5, u_size5, u_fx5) * u_mix5
-         + deckColor(u_deck6, vUv, u_scale6, u_size6, u_fx6) * u_mix6
-         + deckColor(u_deck7, vUv, u_scale7, u_size7, u_fx7) * u_mix7
-         + deckColor(u_deck8, vUv, u_scale8, u_size8, u_fx8) * u_mix8;
+  vec3 a = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1
+         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2
+         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3
+         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
+  vec3 b = deckColor(u_deck5, vUv, u_scale5, u_size5, u_fx5, u_warp5) * u_mix5
+         + deckColor(u_deck6, vUv, u_scale6, u_size6, u_fx6, u_warp6) * u_mix6
+         + deckColor(u_deck7, vUv, u_scale7, u_size7, u_fx7, u_warp7) * u_mix7
+         + deckColor(u_deck8, vUv, u_scale8, u_size8, u_fx8, u_warp8) * u_mix8;
   vec3 c = a * (1.0 - u_xfade) + b * u_xfade;
   gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
 }

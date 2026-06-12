@@ -129,6 +129,7 @@ export default function App() {
           onAssignDeck={library.handleAssignDeck}
           onAddModels={library.handleAddModels}
           onAssignModel={library.handleAssignModel}
+          onAssignLandscape={library.handleAssignLandscape}
           onAddSprites={library.handleAddSprites}
           onAssignSprite={library.handleAssignSprite}
           onDelete={library.handleDeleteEntry}
@@ -186,9 +187,13 @@ export default function App() {
                   onSizeChange={(ch: number, axis: 'x' | 'y', v: number) =>
                     perf.applySize(slotIndex(perf.cueScene, ch), axis, v)
                   }
+                  pos={perf.positions[slot]}
+                  onPosChange={(ch: number, axis: 'x' | 'y', v: number) =>
+                    perf.applyPos(slotIndex(perf.cueScene, ch), axis, v)
+                  }
+                  sourceType={perf.sourceTypes[slot]}
                   fx={perf.fx[slot]}
                   onFxChange={(ch, key, v) => perf.applyFx(slotIndex(perf.cueScene, ch), key, v)}
-                  sourceType={perf.sourceTypes[slot]}
                   aut={perf.aut[slot]}
                   onAutChange={(ch, effect, field, v) =>
                     perf.applyAut(slotIndex(perf.cueScene, ch), effect, field, v)
@@ -196,6 +201,7 @@ export default function App() {
                   onGenerate={generation.handleGenerate}
                   onRegenerate={generation.handleRegenerate}
                   onSave={library.handleSaveDeck}
+                  onReset={(ch: number) => perf.resetChannelConfig(slotIndex(perf.cueScene, ch))}
                   previewRef={(el: HTMLCanvasElement | null) => {
                     previewRefs.current[channel] = el;
                   }}
