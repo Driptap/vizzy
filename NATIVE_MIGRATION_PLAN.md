@@ -1,12 +1,19 @@
 # Vizzy Native Engine Migration Plan
 
-> **Status (2026-06-12):** Phase 0/1 implemented — Tauri 2 shell (`src-tauri/`),
-> native audio (cpal + rustfft), native MIDI (midir), Ollama runtime manager in
-> Rust, `src/platform/` host abstraction, CI (`ci.yml`) + Tauri build/release
-> (`build.yml`). The Electron path is deleted (no backward compatibility of any
-> kind — no legacy shell, data, or localStorage keys). Known gaps until Phase 2:
-> master output window, and rendering still runs via Three.js in the webview
-> (as planned).
+> **Status (2026-06-12):** Phases 0–2 implemented.
+> Phase 0/1 — Tauri 2 shell (`src-tauri/`), native audio (cpal + rustfft),
+> native MIDI (midir), Ollama runtime manager in Rust, `src/platform/` host
+> abstraction, CI + build/release workflows. Electron deleted (no backward
+> compatibility of any kind).
+> Phase 2 — native wgpu render core (`src-tauri/src/render/`): LLM GLSL ingested
+> via naga with a 14-line header (`ingest.rs` — the prompt corpus validated, so
+> prompts stay GLSL), WGSL compositor port, shader-deck pipelines, native master
+> output window (vsync surface), preview/monitor JPEG streaming;
+> `NativeRenderEngine.ts` keeps loop/AUT/audio evaluation in TS and ships slot
+> uniforms per frame. Until Phase 3: model/sprite/landscape/scene decks stage a
+> friendly error on the Tauri build (Three.js path remains for browser dev).
+> Pending from the Phase 0 spike: LLM-generation half (needs a local Ollama +
+> model; the ingestion half is proven).
 
 Migrate Vizzy from Electron + Three.js to a **hybrid architecture**: the React UI stays
 web-based, while rendering, audio analysis, MIDI, and OS integration move into a native
