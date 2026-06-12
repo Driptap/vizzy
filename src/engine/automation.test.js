@@ -88,6 +88,7 @@ describe('animateLandscapeDeck', () => {
 const makeSlotUniforms = () => ({
   mix: { value: 1 },
   scale: { value: 1 },
+  size: { value: { x: 1, y: 1, set(x, y) { this.x = x; this.y = y; } } },
   fx: {
     value: {
       x: 0, y: 1, z: 0, w: 1,
@@ -98,7 +99,7 @@ const makeSlotUniforms = () => ({
   warp: { value: { x: 0, y: 0, set(x, y) { this.x = x; this.y = y; } } },
 });
 
-const makeBase = () => ({ mix: 0.8, scale: 1.5, fx: { x: 0.2, y: 1.1, z: 0.3, w: 0.9 } });
+const makeBase = () => ({ mix: 0.8, scale: 1.5, size: { x: 0.7, y: 0.8 }, fx: { x: 0.2, y: 1.1, z: 0.3, w: 0.9 } });
 
 describe('channel position offsets', () => {
   it('pans and raises the landscape camera, translating rather than turning', () => {
@@ -170,6 +171,7 @@ describe('animateShaderComposite', () => {
 
     expect(uniforms.scale.value).toBeCloseTo(1.5);
     expect(uniforms.mix.value).toBeCloseTo(0.8);
+    expect(uniforms.size.value).toMatchObject({ x: 0.7, y: 0.8 });
     expect(uniforms.fx.value).toMatchObject({ x: 0.2, y: 1.1, z: 0.3, w: 0.9 });
     expect(uniforms.warp.value).toMatchObject({ x: 0, y: 0 });
   });

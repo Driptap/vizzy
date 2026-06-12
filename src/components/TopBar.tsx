@@ -23,6 +23,8 @@ interface TopBarProps {
   midiInputs: number;
   onOpenTutorial: () => void;
   onResetRig: () => void;
+  bpm: number;
+  onBpmChange: (bpm: number) => void;
 }
 
 export function TopBar({
@@ -45,6 +47,8 @@ export function TopBar({
   midiInputs,
   onOpenTutorial,
   onResetRig,
+  bpm,
+  onBpmChange,
 }: TopBarProps) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
@@ -169,6 +173,18 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-1" title="Global tempo — drives every deck's looper">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-500">BPM</span>
+          <input
+            type="number"
+            min={40}
+            max={220}
+            value={bpm}
+            onChange={(e) => onBpmChange(Number(e.target.value))}
+            aria-label="Tempo in BPM"
+            className="w-14 rounded border border-neutral-700 bg-neutral-950 px-1.5 py-1 text-center text-xs text-neutral-300 focus:border-cyan-500 focus:outline-none"
+          />
+        </div>
         <button
           type="button"
           onClick={handleResetClick}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Knob } from './Knob';
+import { LooperModal } from './LooperModal';
 import type {
   AudioBand,
   AutEffectKey,
@@ -8,7 +9,9 @@ import type {
   ChannelLight,
   ChannelPos,
   ChannelSize,
+  DeckLoop,
   DeckStatus,
+  LoopControlId,
   SourceType,
 } from '../types';
 
@@ -24,7 +27,7 @@ const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = 
 
 const BUSY_STATUSES: DeckStatus[] = ['queued', 'generating', 'compiling'];
 
-const TABS = ['XFRM', 'AUDIO', 'COLOR', 'AUT'];
+const TABS = ['XFRM', 'AUDIO', 'COLOR', 'AUT', 'LOOP'];
 
 // deck types with a real light rig (only sprites are unlit)
 const LIT_SOURCES: SourceType[] = ['model', 'landscape', 'scene'];
@@ -64,6 +67,8 @@ interface DeckModuleProps {
   /** compositing layer 1 (top) .. 4 (base) */
   layer: number;
   onLayerChange: (channel: number, layer: number) => void;
+  loop: DeckLoop;
+  onLoopChange: (channel: number, loop: DeckLoop) => void;
   sourceType: SourceType;
   fx: ChannelFx;
   onFxChange: <K extends keyof ChannelFx>(channel: number, key: K, value: ChannelFx[K]) => void;
@@ -98,6 +103,8 @@ export function DeckModule({
   onLightChange,
   layer,
   onLayerChange,
+  loop,
+  onLoopChange,
   sourceType,
   fx,
   onFxChange,
@@ -114,6 +121,7 @@ export function DeckModule({
   const [aspectLocked, setAspectLocked] = useState(false);
   // what Generate produces: a GLSL shader, or a procedural fly-through scene
   const [genMode, setGenMode] = useState<'shader' | 'scene'>('shader');
+  const [looperOpen, setLooperOpen] = useState(false);
 
   const clampSize = (v: number) => Math.min(1, Math.max(0.05, v));
   // when locked, moving one axis scales the other by the same factor
@@ -136,6 +144,25 @@ export function DeckModule({
   const tabs = LIT_SOURCES.includes(sourceType) ? [...TABS, 'LIGHT'] : TABS;
   const effectiveTab = tabs.includes(tab) ? tab : 'XFRM';
 
+
+  // current channel values normalized into lane space, to seed new lanes
+  const norm = (v: number, lo: number, hi: number) => (v - lo) / (hi - lo);
+  const laneSeeds: Partial<Record<LoopControlId, number>> = {
+    opacity: 1, // multiplicative neutral
+    scale: norm(scale, 0.25, 3),
+    sizeX: norm(size.x, 0.05, 1),
+    sizeY: norm(size.y, 0.05, 1),
+    posX: norm(pos.x, -2, 2),
+    posY: norm(pos.y, -2, 2),
+    tilt: norm(fx.tilt, -180, 180),
+    contrast: norm(fx.contrast, 0, 2),
+    hue: norm(fx.hue, -180, 180),
+    sat: norm(fx.sat, 0, 2),
+    brightness: norm(light.brightness, 0, 2),
+    lightAngle: norm(light.angle, -180, 180),
+  };
+
+  const laneCount = Object.keys(loop.lanes).length;
 
   const generate = () => {
     if (prompt.trim() && !busy) onGenerate(index, prompt.trim(), genMode);
@@ -447,6 +474,40 @@ export function DeckModule({
               </button>
             </div>
           ))}
+        {effectiveTab === 'LOOP' && (
+          <>
+            <button
+              type="button"
+              onClick={() => onLoopChange(index, { ...loop, playing: !loop.playing })}
+              aria-pressed={loop.playing}
+              title={
+                loop.playing
+                  ? 'Pause the automation loop (controls return to the knobs)'
+                  : 'Play the automation loop, beat-locked to the global BPM'
+              }
+              className={`rounded px-4 py-2 text-sm font-bold transition-colors ${
+                loop.playing
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+              }`}
+            >
+              {loop.playing ? '⏸' : '▶'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setLooperOpen(true)}
+              className="rounded border border-neutral-700 px-4 py-2 text-xs font-bold tracking-wider text-neutral-300 transition-colors hover:border-cyan-500 hover:text-cyan-300"
+            >
+              EDIT
+            </button>
+            <span className="text-[9px] leading-tight text-neutral-500">
+              {laneCount} lane{laneCount === 1 ? '' : 's'}
+              <br />
+              {loop.blocks} × {loop.divider < 1 ? `1/${1 / loop.divider}` : loop.divider}♪
+            </span>
+          </>
+        )}
+
         {effectiveTab === 'LIGHT' && (
           <>
             <Knob
@@ -541,6 +602,16 @@ export function DeckModule({
         <p className="line-clamp-2 text-[10px] leading-tight text-red-400" title={error}>
           {error}
         </p>
+      )}
+
+      {looperOpen && (
+        <LooperModal
+          deckLabel={`${sceneLetter}${index + 1}`}
+          loop={loop}
+          currentValues={laneSeeds}
+          onChange={(next) => onLoopChange(index, next)}
+          onClose={() => setLooperOpen(false)}
+        />
       )}
     </div>
   );

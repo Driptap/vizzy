@@ -19,6 +19,8 @@ const defaultProps = () => ({
   onLightChange: vi.fn(),
   layer: 4,
   onLayerChange: vi.fn(),
+  loop: { playing: false, blocks: 4, divider: 1, lanes: {} },
+  onLoopChange: vi.fn(),
   sourceType: 'shader',
   fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
   onFxChange: vi.fn(),
@@ -235,6 +237,58 @@ describe('DeckModule tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'LIGHT' }));
     rerender(<DeckModule {...props} sourceType="shader" />);
     expect(screen.getByRole('slider', { name: 'SCALE' })).toBeInTheDocument();
+  });
+
+  it('LOOP tab has play/pause and opens the editor modal', () => {
+    const { onLoopChange } = renderDeck({ index: 1 });
+    fireEvent.click(screen.getByRole('button', { name: 'LOOP' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '▶' }));
+    expect(onLoopChange).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ playing: true }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'EDIT' }));
+    expect(screen.getByRole('dialog', { name: 'Looper A2' })).toBeInTheDocument();
+  });
+
+  it('the looper editor enables lanes seeded at the current knob value', () => {
+    const { onLoopChange } = renderDeck({ scale: 3 }); // top of the 0.25..3 range
+    fireEvent.click(screen.getByRole('button', { name: 'LOOP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'EDIT' }));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Automate SCALE' }));
+    expect(onLoopChange).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({
+        lanes: {
+          scale: [
+            { t: 0, v: 1, bend: 0 },
+            { t: 1, v: 1, bend: 0 },
+          ],
+        },
+      }),
+    );
+  });
+
+  it('the looper editor manages blocks within 1..8 and the tempo divider', () => {
+    const { onLoopChange } = renderDeck({
+      loop: { playing: false, blocks: 8, divider: 1, lanes: {} },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'LOOP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'EDIT' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add block' }));
+    expect(onLoopChange).toHaveBeenCalledWith(0, expect.objectContaining({ blocks: 8 })); // capped
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove block' }));
+    expect(onLoopChange).toHaveBeenCalledWith(0, expect.objectContaining({ blocks: 7 }));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Block length in beats' }), {
+      target: { value: '4' },
+    });
+    expect(onLoopChange).toHaveBeenCalledWith(0, expect.objectContaining({ divider: 4 }));
   });
 
   it('AUT tab is available on every deck (shader decks animate at the composite)', () => {

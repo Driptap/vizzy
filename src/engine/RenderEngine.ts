@@ -21,7 +21,17 @@ import {
 } from './automation';
 import { makeCompositeScene, sceneUniformSet, masterUniformSet } from './compositor';
 import { flipAndPremultiply } from './preview';
-import type { AudioBand, AutomationMap, ChannelLight, ChannelPos, ChannelSource, SceneSpec, StageResult } from '../types';
+import type {
+  AudioBand,
+  AutomationMap,
+  ChannelLight,
+  ChannelPos,
+  ChannelSource,
+  DeckLoop,
+  SceneSpec,
+  StageResult,
+} from '../types';
+import { sampleLane } from '../lib/loopControls';
 import type { BlitView, Deck, DeckAudioUniforms, LightRig, SlotBaseParams, SlotUniforms } from './types';
 import type { AudioEngine } from './AudioEngine';
 
@@ -74,6 +84,15 @@ export class RenderEngine {
   positions: ChannelPos[];
   /** per-channel light rig controls (angle already in radians) */
   lighting: ChannelLight[];
+  /** per-deck beat-locked automation loops (null = none configured) */
+  loops: (DeckLoop | null)[];
+  bpm: number;
+  /** reused per-deck override targets so loop evaluation never allocates */
+  private loopScratch: {
+    base: SlotBaseParams;
+    pos: ChannelPos;
+    light: ChannelLight;
+  }[];
   /** knob-set composite params; AUT modulates the uniforms around these */
   baseParams: SlotBaseParams[];
   /** per-deck accumulated composite spin (shader-deck ROT automation) */
@@ -235,7 +254,15 @@ export class RenderEngine {
     this.baseParams = this.decks.map((_, i) => ({
       mix: INITIAL_OPACITIES[i],
       scale: 1,
+      size: { x: 1, y: 1 },
       fx: new THREE.Vector4(0, 1, 0, 1),
+    }));
+    this.loops = this.decks.map(() => null);
+    this.bpm = 120;
+    this.loopScratch = this.decks.map(() => ({
+      base: { mix: 0, scale: 1, size: { x: 1, y: 1 }, fx: new THREE.Vector4(0, 1, 0, 1) },
+      pos: { x: 0, y: 0 },
+      light: { brightness: 1, angle: 0 },
     }));
     this.compositeSpin = this.decks.map(() => ({ spin: 0 }));
     this.xfadeUniform = { value: 0 };
@@ -315,6 +342,7 @@ export class RenderEngine {
   }
 
   setSize(deckIndex: number, x: number, y: number): void {
+    this.baseParams[deckIndex].size = { x, y };
     this.slotUniforms[deckIndex].size.value.set(x, y);
   }
 
@@ -352,6 +380,72 @@ export class RenderEngine {
   /** @param layer compositing layer 1 (top) .. 4 (base) */
   setLayer(deckIndex: number, layer: number): void {
     this.slotUniforms[deckIndex].layer.value = layer;
+  }
+
+  setBpm(bpm: number): void {
+    this.bpm = bpm;
+  }
+
+  setLoop(deckIndex: number, loop: DeckLoop | null): void {
+    this.loops[deckIndex] = loop;
+  }
+
+  // Evaluate the deck's automation lanes at the given phase and overlay them
+  // on the knob-set values: knobs stay untouched (stopping the loop lands
+  // back on them), the FADER lane multiplies the fader so mute still wins,
+  // every other lane overrides its control absolutely.
+  private applyLoopOverrides(
+    deckIndex: number,
+    loop: DeckLoop,
+    phase: number,
+  ): { base: SlotBaseParams; pos: ChannelPos; light: ChannelLight } {
+    const scratch = this.loopScratch[deckIndex];
+    const base = this.baseParams[deckIndex];
+    const pos = this.positions[deckIndex];
+    const light = this.lighting[deckIndex];
+
+    scratch.base.mix = base.mix;
+    scratch.base.scale = base.scale;
+    scratch.base.size.x = base.size.x;
+    scratch.base.size.y = base.size.y;
+    scratch.base.fx.copy(base.fx);
+    scratch.pos.x = pos.x;
+    scratch.pos.y = pos.y;
+    scratch.light.brightness = light.brightness;
+    scratch.light.angle = light.angle;
+
+    const lane = (id: keyof DeckLoop['lanes']): number | null => {
+      const points = loop.lanes[id];
+      return points ? sampleLane(points, phase) : null;
+    };
+    const lerp = (lo: number, hi: number, v: number) => lo + (hi - lo) * v;
+
+    const opacity = lane('opacity');
+    if (opacity !== null) scratch.base.mix = base.mix * opacity;
+    const scale = lane('scale');
+    if (scale !== null) scratch.base.scale = lerp(0.25, 3, scale);
+    const sizeX = lane('sizeX');
+    if (sizeX !== null) scratch.base.size.x = lerp(0.05, 1, sizeX);
+    const sizeY = lane('sizeY');
+    if (sizeY !== null) scratch.base.size.y = lerp(0.05, 1, sizeY);
+    const posX = lane('posX');
+    if (posX !== null) scratch.pos.x = lerp(-2, 2, posX);
+    const posY = lane('posY');
+    if (posY !== null) scratch.pos.y = lerp(-2, 2, posY);
+    const tilt = lane('tilt');
+    if (tilt !== null) scratch.base.fx.x = lerp(-Math.PI, Math.PI, tilt);
+    const contrast = lane('contrast');
+    if (contrast !== null) scratch.base.fx.y = lerp(0, 2, contrast);
+    const hue = lane('hue');
+    if (hue !== null) scratch.base.fx.z = lerp(-Math.PI, Math.PI, hue);
+    const sat = lane('sat');
+    if (sat !== null) scratch.base.fx.w = lerp(0, 2, sat);
+    const brightness = lane('brightness');
+    if (brightness !== null) scratch.light.brightness = lerp(0, 2, brightness);
+    const lightAngle = lane('lightAngle');
+    if (lightAngle !== null) scratch.light.angle = lerp(-Math.PI, Math.PI, lightAngle);
+
+    return { base: scratch.base, pos: scratch.pos, light: scratch.light };
   }
 
   // Return every deck to its baseline shader, disposing staged models,
@@ -908,6 +1002,19 @@ export class RenderEngine {
     this.decks.forEach((deck, i) => {
       const level = this.deckAudioUniforms[i].u_audio_level.value;
 
+      // The looper overlays its lanes on the knob values for this frame only
+      // — beat-locked to the global clock so every playing deck shares one
+      // tempo grid. AUT still modulates on top of the looped values.
+      let base = this.baseParams[i];
+      let pos = this.positions[i];
+      let light = this.lighting[i];
+      const loop = this.loops[i];
+      if (loop?.playing) {
+        const beats = Math.max(0.125, loop.blocks * loop.divider);
+        const phase = ((t * this.bpm) / 60 / beats) % 1;
+        ({ base, pos, light } = this.applyLoopOverrides(i, loop, phase));
+      }
+
       // Composite-stage automation: shader decks have no scene-graph, so AUT
       // modulates their sampling params; everything else animates in-scene
       // and keeps its composite params pinned to the knob values (TLT excepted
@@ -915,7 +1022,7 @@ export class RenderEngine {
       if (deck.mode === 'shader') {
         animateShaderComposite(
           this.slotUniforms[i],
-          this.baseParams[i],
+          base,
           this.compositeSpin[i],
           this.automation[i],
           level,
@@ -923,20 +1030,20 @@ export class RenderEngine {
           dt,
         );
       } else {
-        pinCompositeToBase(this.slotUniforms[i], this.baseParams[i], this.automation[i], level, t);
+        pinCompositeToBase(this.slotUniforms[i], base, this.automation[i], level, t);
       }
 
       this.renderer.setRenderTarget(deck.target);
       if (deck.mode === 'model' && deck.model) {
-        animateModelDeck(deck.model, this.automation[i], level, t, dt, this.positions[i]);
-        applyLightRig(deck.model.rig, this.lighting[i]);
+        animateModelDeck(deck.model, this.automation[i], level, t, dt, pos);
+        applyLightRig(deck.model.rig, light);
         this.renderer.render(deck.model.scene, this.modelCamera);
       } else if (deck.mode === 'sprite' && deck.sprite) {
-        animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt, this.positions[i]);
+        animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt, pos);
         this.renderer.render(deck.sprite.scene, this.camera);
       } else if ((deck.mode === 'landscape' || deck.mode === 'scene') && deck.landscape) {
-        animateLandscapeDeck(deck.landscape, this.automation[i], level, t, dt, this.positions[i]);
-        if (deck.landscape.rig) applyLightRig(deck.landscape.rig, this.lighting[i]);
+        animateLandscapeDeck(deck.landscape, this.automation[i], level, t, dt, pos);
+        if (deck.landscape.rig) applyLightRig(deck.landscape.rig, light);
         this.renderer.render(deck.landscape.scene, deck.landscape.camera);
       } else {
         this.renderer.render(deck.scene, this.camera);

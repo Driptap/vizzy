@@ -9,6 +9,7 @@ import {
   makeDefaultAut,
   sceneOfSlot,
 } from '../lib/channels';
+import { defaultLoop } from '../lib/loopControls';
 import type {
   AutEffectKey,
   AutomationMap,
@@ -17,11 +18,14 @@ import type {
   ChannelPos,
   ChannelSize,
   DeckChannelConfig,
+  DeckLoop,
   DeckStatus,
   DeckUiState,
   SessionSnapshot,
   SourceType,
 } from '../types';
+
+const DEFAULT_BPM = 120;
 
 export type PerformanceState = ReturnType<typeof usePerformanceState>;
 
@@ -45,6 +49,10 @@ export function usePerformanceState() {
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })),
   );
   const [layers, setLayers] = useState<number[]>(() => Array(SLOTS).fill(DEFAULT_LAYER));
+  const [loops, setLoops] = useState<DeckLoop[]>(() =>
+    Array.from({ length: SLOTS }, defaultLoop),
+  );
+  const [bpm, setBpm] = useState(DEFAULT_BPM);
   const [fx, setFx] = useState<ChannelFx[]>(() =>
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })),
   );
@@ -99,6 +107,14 @@ export function usePerformanceState() {
     setLayers((prev) => prev.map((v, i) => (i === slot ? layer : v)));
   }, []);
 
+  const applyLoop = useCallback((slot: number, loop: DeckLoop) => {
+    setLoops((prev) => prev.map((l, i) => (i === slot ? loop : l)));
+  }, []);
+
+  const applyBpm = useCallback((value: number) => {
+    setBpm(Math.min(220, Math.max(40, Math.round(value) || DEFAULT_BPM)));
+  }, []);
+
   const applyCrossfade = useCallback((value: number) => {
     setCrossfade(value);
   }, []);
@@ -133,6 +149,7 @@ export function usePerformanceState() {
     setPositions((prev) => prev.map((v, i) => (i === slot ? { x: 0, y: 0 } : v)));
     setLights((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_LIGHT } : v)));
     setLayers((prev) => prev.map((v, i) => (i === slot ? DEFAULT_LAYER : v)));
+    setLoops((prev) => prev.map((v, i) => (i === slot ? defaultLoop() : v)));
     setFx((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FX } : v)));
     setAut((prev) => prev.map((v, i) => (i === slot ? makeDefaultAut() : v)));
   }, []);
@@ -148,6 +165,7 @@ export function usePerformanceState() {
     setPositions(Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 })));
     setLights(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })));
     setLayers(Array(SLOTS).fill(DEFAULT_LAYER));
+    setLoops(Array.from({ length: SLOTS }, defaultLoop));
     setFx(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
     setAut(Array.from({ length: SLOTS }, makeDefaultAut));
     setSourceTypes(Array(SLOTS).fill('shader'));
@@ -171,6 +189,9 @@ export function usePerformanceState() {
     setPositions((prev) => forScene(prev, (c, v) => (c.pos ? { ...c.pos } : v)));
     setLights((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_LIGHT, ...(c.light ?? v) })));
     setLayers((prev) => forScene(prev, (c, v) => c.layer ?? v));
+    setLoops((prev) =>
+      forScene(prev, (c, v) => (c.loop ? structuredClone(c.loop) : v)),
+    );
     setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
     setAut((prev) =>
       forScene(prev, (c, v) =>
@@ -198,6 +219,10 @@ export function usePerformanceState() {
     setPositions(perSlot((s) => ({ x: 0, y: 0, ...(s.pos || {}) }), () => ({ x: 0, y: 0 })));
     setLights(perSlot((s) => ({ ...DEFAULT_LIGHT, ...(s.light || {}) }), () => ({ ...DEFAULT_LIGHT })));
     setLayers(perSlot((s) => s.layer ?? DEFAULT_LAYER, () => DEFAULT_LAYER));
+    setLoops(
+      perSlot((s) => (s.loop ? { ...defaultLoop(), ...structuredClone(s.loop) } : defaultLoop()), defaultLoop),
+    );
+    setBpm(session.bpm ?? DEFAULT_BPM);
     setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
     setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
     setCrossfade(session.crossfade ?? 0);
@@ -214,6 +239,8 @@ export function usePerformanceState() {
     positions,
     lights,
     layers,
+    loops,
+    bpm,
     fx,
     aut,
     sourceTypes,
@@ -229,6 +256,8 @@ export function usePerformanceState() {
     applyPos,
     applyLight,
     applyLayer,
+    applyLoop,
+    applyBpm,
     applyCrossfade,
     applyFx,
     applyAut,

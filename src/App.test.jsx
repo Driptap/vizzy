@@ -17,6 +17,8 @@ vi.mock('./engine/RenderEngine', () => {
       this.setPosition = vi.fn();
       this.setLighting = vi.fn();
       this.setLayer = vi.fn();
+      this.setLoop = vi.fn();
+      this.setBpm = vi.fn();
       this.resetAllDecks = vi.fn();
       this.setChannelFx = vi.fn();
       this.setAudioRouting = vi.fn();
@@ -395,6 +397,31 @@ describe('layering', () => {
     fireEvent.click(screen.getByRole('button', { name: 'CUE B' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Layer 2' })[2]); // deck B3
     await waitFor(() => expect(engine().setLayer).toHaveBeenCalledWith(6, 2));
+  });
+});
+
+describe('looper', () => {
+  it('BPM edits and loop play state reach the engine for the cued slot', async () => {
+    await renderApp();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tempo in BPM' }), {
+      target: { value: '140' },
+    });
+    await waitFor(() => expect(engine().setBpm).toHaveBeenCalledWith(140));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'LOOP' })[2]); // deck A3's tab
+    engine().setLoop.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '▶' }));
+    await waitFor(() =>
+      expect(engine().setLoop).toHaveBeenCalledWith(2, expect.objectContaining({ playing: true })),
+    );
+  });
+
+  it('BPM is clamped to a sane musical range', async () => {
+    await renderApp();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tempo in BPM' }), {
+      target: { value: '9999' },
+    });
+    await waitFor(() => expect(engine().setBpm).toHaveBeenCalledWith(220));
   });
 });
 

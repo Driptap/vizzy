@@ -146,6 +146,7 @@ export function animateShaderComposite(
   const pulse =
     1 + aut.scl.amt * 0.4 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
   uniforms.scale.value = base.scale * pulse;
+  uniforms.size.value.set(base.size.x, base.size.y);
 
   state.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
   uniforms.fx.value.set(
@@ -176,6 +177,7 @@ export function pinCompositeToBase(
   t: number,
 ): void {
   uniforms.scale.value = base.scale;
+  uniforms.size.value.set(base.size.x, base.size.y);
   uniforms.fx.value.set(base.fx.x + tiltWobble(aut, level, t), base.fx.y, base.fx.z, base.fx.w);
   uniforms.mix.value = base.mix;
   uniforms.warp.value.set(0, 0);

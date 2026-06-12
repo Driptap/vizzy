@@ -59,6 +59,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     positions,
     lights,
     layers,
+    loops,
     fx,
     aut,
     setDeckState,
@@ -220,6 +221,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           pos: { ...positions[slot] },
           light: { ...lights[slot] },
           layer: layers[slot],
+          loop: structuredClone(loops[slot]),
           fx: { ...fx[slot] },
           aut: structuredClone(aut[slot]),
         };
@@ -266,7 +268,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     } catch (err) {
       console.error('[Vizzy] Saving deck preset failed:', err);
     }
-  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, lights, layers, fx, aut]);
+  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, fx, aut]);
 
   // Load a deck preset into scene A or B: stage all 4 channels and restore
   // each channel's config; the engine sync effect pushes it down. Takes the

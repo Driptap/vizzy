@@ -97,6 +97,7 @@ export interface SlotUniforms {
 export interface SlotBaseParams {
   mix: number;
   scale: number;
+  size: { x: number; y: number };
   fx: THREE.Vector4;
 }
 

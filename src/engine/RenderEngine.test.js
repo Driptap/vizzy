@@ -588,6 +588,84 @@ describe('aspect settling', () => {
   });
 });
 
+describe('looper playback', () => {
+  const flat = (v) => [
+    { t: 0, v, bend: 0 },
+    { t: 1, v, bend: 0 },
+  ];
+
+  it('a playing loop overrides knobs for the frame; pausing restores them', () => {
+    const engine = makeEngine();
+    engine.setScale(0, 2);
+    engine.setOpacity(0, 0.8);
+    engine.setSize(0, 0.9, 0.9);
+    engine.setLoop(0, {
+      playing: true,
+      blocks: 4,
+      divider: 1,
+      lanes: {
+        opacity: flat(0.5), // multiplies the fader
+        scale: flat(1), // absolute: top of the 0.25..3 range
+        tilt: flat(0.5), // absolute: centre of ±π = 0 rad
+        sizeX: flat(0), // bottom of 0.05..1
+      },
+    });
+    engine.loop();
+
+    const slot = engine.slotUniforms[0];
+    expect(slot.mix.value).toBeCloseTo(0.8 * 0.5);
+    expect(slot.scale.value).toBeCloseTo(3);
+    expect(slot.fx.value.x).toBeCloseTo(0);
+    expect(slot.size.value.x).toBeCloseTo(0.05);
+    expect(slot.size.value.y).toBeCloseTo(0.9); // no lane = knob value
+    // the knob bases survive untouched
+    expect(engine.baseParams[0].scale).toBe(2);
+    expect(engine.baseParams[0].mix).toBe(0.8);
+
+    engine.setLoop(0, { playing: false, blocks: 4, divider: 1, lanes: { scale: flat(1) } });
+    engine.loop();
+    expect(slot.scale.value).toBe(2); // straight back on the knobs
+    expect(slot.mix.value).toBe(0.8);
+  });
+
+  it('lanes ramp over the beat-locked phase', () => {
+    const engine = makeEngine();
+    engine.setBpm(60); // 1 beat per second; clock ticks 16ms per frame
+    engine.setOpacity(0, 1);
+    engine.setLoop(0, {
+      playing: true,
+      blocks: 1,
+      divider: 1,
+      lanes: { opacity: [{ t: 0, v: 0, bend: 0 }, { t: 1, v: 1, bend: 0 }] },
+    });
+
+    engine.loop(); // t=0.016 -> phase 0.016
+    const first = engine.slotUniforms[0].mix.value;
+    for (let i = 0; i < 20; i += 1) engine.loop(); // t=0.352
+    const later = engine.slotUniforms[0].mix.value;
+    expect(first).toBeLessThan(0.05);
+    expect(later).toBeGreaterThan(first);
+    expect(later).toBeCloseTo(0.336, 1);
+  });
+
+  it('loop position/light lanes feed the in-scene content', async () => {
+    const engine = makeEngine();
+    const { Group } = await import('three');
+    await engine.stageModel(0, new Group(), 'model-1');
+    engine.setLoop(0, {
+      playing: true,
+      blocks: 1,
+      divider: 1,
+      lanes: { posX: flat(1), brightness: flat(0) }, // hard right, blackout
+    });
+    engine.loop();
+
+    expect(engine.decks[0].model.group.position.x).toBeCloseTo(2);
+    expect(engine.decks[0].model.rig.key.intensity).toBe(0);
+    expect(engine.positions[0].x).toBe(0); // base untouched
+  });
+});
+
 describe('channel lighting', () => {
   const makeObject = async () => {
     const { Group } = await import('three');

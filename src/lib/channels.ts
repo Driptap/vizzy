@@ -1,4 +1,5 @@
 import type { AutEffectKey, AutomationMap, ChannelConfig, ChannelFx, ChannelLight } from '../types';
+import { defaultLoop } from './loopControls';
 
 // The channel/slot model shared by the UI, the render engine and persistence:
 // 2 scenes (A and B) of 4 channels each, addressed as 8 flat slots.
@@ -42,4 +43,5 @@ export const defaultChannelConfig = (): ChannelConfig => ({
   layer: DEFAULT_LAYER,
   fx: { ...DEFAULT_FX },
   aut: makeDefaultAut(),
+  loop: defaultLoop(),
 });

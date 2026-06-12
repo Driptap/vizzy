@@ -50,6 +50,43 @@ export interface ChannelPos {
   y: number;
 }
 
+/** A controllable channel parameter the looper can automate. */
+export type LoopControlId =
+  | 'opacity'
+  | 'scale'
+  | 'sizeX'
+  | 'sizeY'
+  | 'posX'
+  | 'posY'
+  | 'tilt'
+  | 'contrast'
+  | 'hue'
+  | 'sat'
+  | 'brightness'
+  | 'lightAngle';
+
+/** One automation anchor: position/value in 0..1, bend curves the segment
+ *  LEAVING this point (-1 eases early, +1 eases late, 0 linear). */
+export interface LoopPoint {
+  t: number;
+  v: number;
+  bend: number;
+}
+
+/**
+ * A deck's beat-locked automation loop: blocks x divider beats long. A lane's
+ * presence means that control is automated; values override the knobs while
+ * playing (the FADER lane multiplies the mixer fader instead).
+ */
+export interface DeckLoop {
+  playing: boolean;
+  /** 1..8 blocks */
+  blocks: number;
+  /** beats per block (the tempo divider) */
+  divider: number;
+  lanes: Partial<Record<LoopControlId, LoopPoint[]>>;
+}
+
 /** Light rig controls for lit decks (3D models, mesh landscapes). */
 export interface ChannelLight {
   /** master intensity multiplier, 0..2 (1 = the built-in rig) */
@@ -71,6 +108,7 @@ export interface ChannelConfig {
   layer: number;
   fx: ChannelFx;
   aut: AutomationMap;
+  loop: DeckLoop;
 }
 
 // ---- procedural fly-through scenes ----
@@ -168,5 +206,7 @@ export interface SessionSnapshot {
   version: 1;
   crossfade: number;
   cueScene: number;
+  /** global tempo driving the deck loopers */
+  bpm?: number;
   slots: SessionSlot[];
 }

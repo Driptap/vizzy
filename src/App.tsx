@@ -122,6 +122,8 @@ export default function App() {
         midiInputs={midi.midiInputs}
         onOpenTutorial={() => setTutorialOpen(true)}
         onResetRig={handleResetRig}
+        bpm={perf.bpm}
+        onBpmChange={perf.applyBpm}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -208,6 +210,8 @@ export default function App() {
                   onLayerChange={(ch: number, l: number) =>
                     perf.applyLayer(slotIndex(perf.cueScene, ch), l)
                   }
+                  loop={perf.loops[slot]}
+                  onLoopChange={(ch, next) => perf.applyLoop(slotIndex(perf.cueScene, ch), next)}
                   sourceType={perf.sourceTypes[slot]}
                   fx={perf.fx[slot]}
                   onFxChange={(ch, key, v) => perf.applyFx(slotIndex(perf.cueScene, ch), key, v)}

@@ -23,6 +23,8 @@ const defaultProps = () => ({
   midiInputs: 0,
   onOpenTutorial: vi.fn(),
   onResetRig: vi.fn(),
+  bpm: 120,
+  onBpmChange: vi.fn(),
 });
 
 const renderTopBar = (overrides = {}) => {
@@ -133,6 +135,14 @@ describe('TopBar', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('shows the global tempo and reports changes', () => {
+    const { onBpmChange } = renderTopBar({ bpm: 128 });
+    const input = screen.getByRole('spinbutton', { name: 'Tempo in BPM' });
+    expect(input).toHaveValue(128);
+    fireEvent.change(input, { target: { value: '140' } });
+    expect(onBpmChange).toHaveBeenCalledWith(140);
   });
 
   it('opens the tutorial', () => {
