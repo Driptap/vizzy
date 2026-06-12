@@ -10,10 +10,16 @@
 > prompts stay GLSL), WGSL compositor port, shader-deck pipelines, native master
 > output window (vsync surface), preview/monitor JPEG streaming;
 > `NativeRenderEngine.ts` keeps loop/AUT/audio evaluation in TS and ships slot
-> uniforms per frame. Until Phase 3: model/sprite/landscape/scene decks stage a
-> friendly error on the Tauri build (Three.js path remains for browser dev).
+> uniforms per frame.
+> Phase 3 — all five deck content types render natively: sprites (native
+> decode), models (.glb/.gltf/.obj/.stl — .fbx dropped, no Rust loader),
+> landscapes and procedural scenes (tiled flight with fog + the three light
+> rigs). TS animates headless three.js state with the unchanged automation
+> functions and ships transforms in a per-deck ext block. glTF baseColorTexture
+> is skipped for now (factor + vertex colors only).
 > Pending from the Phase 0 spike: LLM-generation half (needs a local Ollama +
-> model; the ingestion half is proven).
+> model; the ingestion half is proven). Next: Phase 4 (loop/AUT evaluation
+> native), Phase 5 (Syphon/Spout).
 
 Migrate Vizzy from Electron + Three.js to a **hybrid architecture**: the React UI stays
 web-based, while rendering, audio analysis, MIDI, and OS integration move into a native
