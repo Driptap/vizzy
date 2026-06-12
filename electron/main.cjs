@@ -1,6 +1,7 @@
 const { app, BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { registerOllamaIpc } = require('./ollama-manager.cjs');
 
 // Web MIDI + getUserMedia are permission-gated in Electron; without these
 // handlers requestMIDIAccess() rejects silently.
@@ -65,6 +66,8 @@ app.whenReady().then(() => {
   ipcMain.handle('vizzy:get-sprites-dir', () =>
     path.join(app.getPath('userData'), 'sprites'),
   );
+
+  registerOllamaIpc();
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.includes(permission));

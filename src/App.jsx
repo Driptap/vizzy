@@ -2,9 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RenderEngine, CHANNELS } from './engine/RenderEngine';
 import { AudioEngine } from './engine/AudioEngine';
 import { MidiEngine } from './engine/MidiEngine';
-import { GenerationQueue, DEFAULT_MODEL } from './llm/ollama';
+import {
+  GenerationQueue,
+  DEFAULT_MODEL,
+  resolveServer,
+  listInstalledModels,
+} from './llm/ollama';
+import { catalogEntry } from './llm/models';
 import { extractShaderCode } from './llm/parser';
 import { TopBar } from './components/TopBar';
+import { SetupScreen } from './components/SetupScreen';
 import { DeckModule } from './components/DeckModule';
 import { Mixer } from './components/Mixer';
 import { LibraryPanel } from './components/LibraryPanel';
@@ -79,6 +86,9 @@ export default function App() {
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState(modelRef.current);
+  const [installedModels, setInstalledModels] = useState([]);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [llmReady, setLlmReady] = useState(false);
   const [midiLearn, setMidiLearn] = useState(false);
   const [armedControl, setArmedControl] = useState(null);
   const [controlMap, setControlMap] = useState({});
@@ -236,6 +246,30 @@ export default function App() {
     listShaders()
       .then(setLibrary)
       .catch((err) => console.warn('[Vizzy] Could not load shader library:', err));
+  }, []);
+
+  // LLM bootstrap: a reachable server with the chosen model means we're done;
+  // anything else opens the setup overlay (which can also start/download a
+  // managed Ollama runtime).
+  useEffect(() => {
+    (async () => {
+      const base = await resolveServer();
+      if (base) {
+        const tags = await listInstalledModels(base);
+        setInstalledModels(tags);
+        if (tags.includes(modelRef.current) || tags.includes(`${modelRef.current}:latest`)) {
+          setLlmReady(true);
+          return;
+        }
+      }
+      setSetupOpen(true);
+    })();
+  }, []);
+
+  const handleSetupReady = useCallback(async () => {
+    setInstalledModels(await listInstalledModels());
+    setLlmReady(true);
+    setSetupOpen(false);
   }, []);
 
   const handleToggleLibrary = useCallback(() => {
@@ -564,11 +598,23 @@ export default function App() {
     }
   }, []);
 
-  const handleModelChange = useCallback((value) => {
-    setModel(value);
-    modelRef.current = value;
-    localStorage.setItem('vizzy.model', value);
-  }, []);
+  const handleModelChange = useCallback(
+    (value) => {
+      setModel(value);
+      modelRef.current = value;
+      localStorage.setItem('vizzy.model', value);
+      // picking a catalog model that isn't downloaded yet sends you through
+      // the setup overlay's pull flow (it preselects this model)
+      if (
+        catalogEntry(value) &&
+        !installedModels.includes(value) &&
+        !installedModels.includes(`${value}:latest`)
+      ) {
+        setSetupOpen(true);
+      }
+    },
+    [installedModels],
+  );
 
   const handleToggleMidiLearn = useCallback(() => {
     setMidiLearn((prev) => {
@@ -588,7 +634,15 @@ export default function App() {
   const sceneLetter = SCENE_LETTERS[cueScene];
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-950 text-neutral-200">
+    <div className="relative flex h-screen flex-col bg-neutral-950 text-neutral-200">
+      {setupOpen && (
+        <SetupScreen
+          model={model}
+          onModelChange={handleModelChange}
+          onReady={handleSetupReady}
+          onSkip={() => setSetupOpen(false)}
+        />
+      )}
       <TopBar
         libraryOpen={libraryOpen}
         onToggleLibrary={handleToggleLibrary}
@@ -601,6 +655,9 @@ export default function App() {
         onToggleAudio={handleToggleAudio}
         model={model}
         onModelChange={handleModelChange}
+        installedModels={installedModels}
+        llmReady={llmReady}
+        onOpenSetup={() => setSetupOpen(true)}
         midiLearn={midiLearn}
         onToggleMidiLearn={handleToggleMidiLearn}
         midiInputs={midiInputs}

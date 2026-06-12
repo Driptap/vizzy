@@ -1,7 +1,85 @@
 import { selectRecipe } from './recipes';
 
-export const DEFAULT_ENDPOINT = 'http://localhost:11434/api/generate';
 export const DEFAULT_MODEL = 'qwen2.5-coder';
+
+// A user-run Ollama on the default port wins; the app-managed one (spawned
+// by electron/ollama-manager.cjs) listens one port up.
+export const DEFAULT_BASE = 'http://127.0.0.1:11434';
+export const MANAGED_BASE = 'http://127.0.0.1:11435';
+
+let baseUrl = DEFAULT_BASE;
+export const getBaseUrl = () => baseUrl;
+export const setBaseUrl = (url) => {
+  baseUrl = url;
+};
+export const DEFAULT_ENDPOINT = `${DEFAULT_BASE}/api/generate`;
+
+/** @returns the server's version string, or null if unreachable */
+export async function checkServer(base, timeoutMs = 1500) {
+  try {
+    const res = await fetch(`${base}/api/version`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    return (await res.json()).version || 'unknown';
+  } catch {
+    return null;
+  }
+}
+
+/** Probe user-run then managed server; sets the module base URL on a hit. */
+export async function resolveServer() {
+  for (const base of [DEFAULT_BASE, MANAGED_BASE]) {
+    if (await checkServer(base)) {
+      setBaseUrl(base);
+      return base;
+    }
+  }
+  return null;
+}
+
+/** @returns array of installed model tags (":latest" stripped) */
+export async function listInstalledModels(base = baseUrl) {
+  try {
+    const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.models || []).map((m) => m.name.replace(/:latest$/, ''));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pull a model with streaming progress. Ollama emits NDJSON lines like
+ * {status, total, completed}; onProgress receives the latest of each.
+ */
+export async function pullModel(tag, onProgress, base = baseUrl) {
+  const res = await fetch(`${base}/api/pull`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: tag }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Pull failed: HTTP ${res.status}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const evt = JSON.parse(line);
+      if (evt.error) throw new Error(evt.error);
+      onProgress?.(evt);
+    }
+  }
+}
 
 export const SYSTEM_PROMPT = `You are an expert GLSL shader programmer writing code for a live VJ performance.
 Write ONLY valid GLSL fragment shader code. Do not include markdown or explanations.
@@ -39,7 +117,7 @@ export class GenerationQueue {
    */
   constructor({ getModel, getEndpoint, onStatus }) {
     this.getModel = getModel;
-    this.getEndpoint = getEndpoint || (() => DEFAULT_ENDPOINT);
+    this.getEndpoint = getEndpoint || (() => `${getBaseUrl()}/api/generate`);
     this.onStatus = onStatus;
     this.queue = [];
     this.busy = false;

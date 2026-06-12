@@ -1,3 +1,8 @@
+import { useState } from 'react';
+import { MODEL_CATALOG } from '../llm/models';
+
+const CUSTOM = '__custom__';
+
 export function TopBar({
   libraryOpen,
   onToggleLibrary,
@@ -10,10 +15,16 @@ export function TopBar({
   onToggleAudio,
   model,
   onModelChange,
+  installedModels,
+  llmReady,
+  onOpenSetup,
   midiLearn,
   onToggleMidiLearn,
   midiInputs,
 }) {
+  const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
+  const [customMode, setCustomMode] = useState(!inCatalog);
+  const showCustom = customMode || !inCatalog;
   return (
     <div className="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
       <h1 className="text-sm font-black tracking-widest text-cyan-400">
@@ -73,13 +84,49 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenSetup}
+          title={llmReady ? 'LLM connected — open model manager' : 'LLM not set up — click to fix'}
+          className={`rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+            llmReady
+              ? 'text-emerald-400 hover:bg-neutral-800'
+              : 'bg-amber-500 text-black hover:bg-amber-400'
+          }`}
+        >
+          {llmReady ? '● LLM' : 'Setup LLM'}
+        </button>
         <span className="text-[10px] uppercase tracking-wider text-neutral-500">Model</span>
-        <input
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-          spellCheck={false}
-          className="w-36 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300 focus:border-cyan-500 focus:outline-none"
-        />
+        <select
+          value={showCustom ? CUSTOM : model}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM) {
+              setCustomMode(true);
+            } else {
+              setCustomMode(false);
+              onModelChange(e.target.value);
+            }
+          }}
+          title="Curated open models — download size · RAM needed"
+          className="max-w-56 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300 focus:border-cyan-500 focus:outline-none"
+        >
+          {MODEL_CATALOG.map((m) => (
+            <option key={m.tag} value={m.tag}>
+              {m.name} — {m.download} · {m.ram} RAM
+              {installedModels?.includes(m.tag) ? '' : ' (not downloaded)'}
+            </option>
+          ))}
+          <option value={CUSTOM}>Custom…</option>
+        </select>
+        {showCustom && (
+          <input
+            value={model}
+            onChange={(e) => onModelChange(e.target.value)}
+            spellCheck={false}
+            placeholder="any ollama tag"
+            className="w-32 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300 focus:border-cyan-500 focus:outline-none"
+          />
+        )}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
