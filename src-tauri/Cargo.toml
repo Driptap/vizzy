@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -24,6 +24,9 @@ rustfft = "6"
 midir = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
+wgpu = { version = "29.0.3", features = ["glsl", "naga-ir"] }
+jpeg-encoder = "0.7.0"
+base64 = "0.22.1"
 
 [profile.release]
 strip = true

@@ -1,6 +1,7 @@
 mod audio;
 mod midi;
 mod ollama;
+mod render;
 
 use tauri::Manager;
 
@@ -11,6 +12,7 @@ pub fn run() {
         .manage(audio::AudioState::default())
         .manage(midi::MidiState::default())
         .manage(ollama::OllamaState::default())
+        .manage(render::RenderState::default())
         .invoke_handler(tauri::generate_handler![
             audio::audio_start,
             audio::audio_stop,
@@ -21,11 +23,17 @@ pub fn run() {
             ollama::ollama_status,
             ollama::ollama_install,
             ollama::ollama_start,
+            render::engine::render_start,
+            render::engine::render_params,
+            render::engine::render_stage_shader,
+            render::window::render_master,
+            render::window::render_master_fullscreen,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Vizzy")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                app.state::<render::RenderState>().stop();
                 app.state::<ollama::OllamaState>().stop();
                 app.state::<audio::AudioState>().stop();
             }
