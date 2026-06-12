@@ -24,7 +24,7 @@ rustfft = "6"
 midir = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
-wgpu = { version = "29.0.3", features = ["glsl", "naga-ir"] }
+wgpu = { version = "29.0.3", features = ["wgsl", "naga-ir"] }
 jpeg-encoder = "0.7.0"
 fastrand = "2"
 base64 = "0.22.1"

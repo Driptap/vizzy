@@ -25,7 +25,7 @@ pub fn run() {
             ollama::ollama_start,
             render::engine::render_start,
             render::engine::render_state,
-            render::engine::render_stage_shader,
+            render::engine::render_stage_patch,
             render::engine::render_stage_sprite,
             render::engine::render_stage_model,
             render::engine::render_stage_landscape,

@@ -15,15 +15,14 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use serde::Serialize;
 use tauri::Emitter;
-use wgpu::naga;
 
 use super::content;
 use super::evaluate::{ContentAnim, Evaluator};
-use super::ingest;
 use super::params::{
     floats_to_bytes, pack_compositor_uniform, pack_deck_uniform, unpad_and_flip_rows, DeckDraw,
     EvaluatedFrame, SLOT_COUNT, UNIFORM_FLOATS,
 };
+use super::patch;
 use super::state::RenderStateMsg;
 use crate::audio::RawLevels;
 
@@ -131,7 +130,7 @@ impl StagedMeshKind {
 pub(crate) enum Job {
     Stage {
         slot: usize,
-        module: Box<naga::Module>,
+        patch: Box<patch::ComposedPatch>,
         reply: SyncSender<Result<(), String>>,
     },
     StageSprite {
@@ -236,9 +235,9 @@ pub fn render_start(
     let shared_state = Arc::new(Mutex::new(RenderStateMsg::default()));
     let aspect = lock(&shared_state).aspect;
     let mut core = GpuCore::new(adapter, device, queue, aspect)?;
-    for (slot, phase) in ingest::DEFAULT_DECK_PHASES.iter().enumerate() {
-        let module = ingest::validate_deck_shader(&ingest::default_deck_body(*phase))?;
-        core.set_deck_pipeline(slot, module)?;
+    for slot in 0..SLOT_COUNT {
+        let composed = patch::compose(&patch::default_patch(slot))?;
+        core.set_deck_patch(slot, composed)?;
     }
 
     let (job_tx, job_rx) = mpsc::channel();
@@ -294,18 +293,18 @@ fn run_job(
 }
 
 #[tauri::command]
-pub async fn render_stage_shader(
+pub async fn render_stage_patch(
     state: tauri::State<'_, RenderState>,
     slot: u32,
-    body: String,
+    spec: patch::PatchSpec,
 ) -> Result<(), String> {
     let slot = check_slot(slot)?;
-    // Cheap naga parse/validate first — same frontend wgpu compiles with, so
-    // most failures are caught here with good errors for the repair loop.
-    let module = ingest::validate_deck_shader(&body)?;
+    // Compose + validate on the command thread; only the pipeline build and
+    // params upload run on the render thread.
+    let composed = patch::compose(&spec)?;
     run_job(&state, |reply| Job::Stage {
         slot,
-        module: Box::new(module),
+        patch: Box::new(composed),
         reply,
     })
 }
@@ -689,6 +688,17 @@ pub(crate) struct GpuCore {
     deck_size: (u32, u32),
     aspect: f32,
 
+    // patch resources (group 1 of every deck pipeline): per-slot params
+    // uniform + previous-frame history texture for feedback trails
+    patch_bind_layout: wgpu::BindGroupLayout,
+    patch_params: Vec<wgpu::Buffer>,
+    patch_bind_groups: Vec<wgpu::BindGroup>,
+    history_textures: Vec<wgpu::Texture>,
+    /// Whether the slot's compiled patch samples its history texture (drives
+    /// the post-pass deck→history copy).
+    patch_history: Vec<bool>,
+    history_sampler: wgpu::Sampler,
+
     // non-shader deck content (Phase 3)
     sprite_pipeline: wgpu::RenderPipeline,
     sprite_bind_layout: wgpu::BindGroupLayout,
@@ -789,9 +799,40 @@ impl GpuCore {
                 count: None,
             }],
         });
+        let patch_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vizzy-patch-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(patch::PARAM_BYTES),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
         let deck_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vizzy-deck-layout"),
-            bind_group_layouts: &[Some(&deck_bind_layout)],
+            bind_group_layouts: &[Some(&deck_bind_layout), Some(&patch_bind_layout)],
             immediate_size: 0,
         });
 
@@ -1230,6 +1271,34 @@ impl GpuCore {
 
         let deck_size = deck_size_for_aspect(aspect);
         let (deck_textures, deck_views) = Self::build_deck_textures(&device, deck_size);
+        // Patch params + feedback history. ClampToEdge keeps trails from
+        // echoing across the opposite edge when the feedback transform pans.
+        let history_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vizzy-history-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let patch_params: Vec<_> = (0..SLOT_COUNT)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("vizzy-patch-params-{i}")),
+                    size: patch::PARAM_BYTES,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        let (history_textures, patch_bind_groups) = Self::build_patch_resources(
+            &device,
+            &patch_bind_layout,
+            &patch_params,
+            &history_sampler,
+            deck_size,
+        );
         let depth_view = Self::make_depth_view(&device, deck_size, mesh_samples);
         let msaa_view = Self::make_msaa_view(&device, deck_size, mesh_samples);
         let comp_bind_group = Self::build_comp_bind_group(
@@ -1265,6 +1334,12 @@ impl GpuCore {
             deck_textures,
             deck_size,
             aspect,
+            patch_bind_layout,
+            patch_params,
+            patch_bind_groups,
+            history_textures,
+            patch_history: vec![false; SLOT_COUNT],
+            history_sampler,
             sprite_pipeline,
             sprite_bind_layout,
             sprite_uniforms,
@@ -1498,6 +1573,57 @@ impl GpuCore {
         (textures, views)
     }
 
+    /// Per-slot history textures (previous deck frame, for feedback trails)
+    /// and the group-1 bind groups tying them to the patch params. Rebuilt
+    /// with the deck targets whenever the aspect changes.
+    fn build_patch_resources(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        params: &[wgpu::Buffer],
+        sampler: &wgpu::Sampler,
+        size: (u32, u32),
+    ) -> (Vec<wgpu::Texture>, Vec<wgpu::BindGroup>) {
+        let mut textures = Vec::with_capacity(SLOT_COUNT);
+        let mut bind_groups = Vec::with_capacity(SLOT_COUNT);
+        for (i, buffer) in params.iter().enumerate() {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("vizzy-history-{i}")),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("vizzy-patch-bg-{i}")),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            }));
+            textures.push(texture);
+        }
+        (textures, bind_groups)
+    }
+
     fn build_comp_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -1608,6 +1734,15 @@ impl GpuCore {
         let (textures, views) = Self::build_deck_textures(&self.device, self.deck_size);
         self.deck_textures = textures;
         self.deck_views = views;
+        let (history, patch_bgs) = Self::build_patch_resources(
+            &self.device,
+            &self.patch_bind_layout,
+            &self.patch_params,
+            &self.history_sampler,
+            self.deck_size,
+        );
+        self.history_textures = history;
+        self.patch_bind_groups = patch_bgs;
         self.depth_view = Self::make_depth_view(&self.device, self.deck_size, self.mesh_samples);
         self.msaa_view = Self::make_msaa_view(&self.device, self.deck_size, self.mesh_samples);
         self.comp_bind_group = Self::build_comp_bind_group(
@@ -1619,13 +1754,13 @@ impl GpuCore {
         );
     }
 
-    /// Build (or replace) a deck pipeline from a validated naga module. Device
-    /// level failures are caught with an error scope and returned verbatim —
-    /// they feed the LLM repair loop.
-    pub(crate) fn set_deck_pipeline(
+    /// Build (or replace) a deck pipeline from a composed patch. The module
+    /// is generated from trusted blocks, so a device-level failure here is an
+    /// internal bug — still caught with an error scope and returned.
+    pub(crate) fn set_deck_patch(
         &mut self,
         slot: usize,
-        module: naga::Module,
+        composed: patch::ComposedPatch,
     ) -> Result<(), String> {
         if slot >= SLOT_COUNT {
             return Err(format!("invalid deck slot {slot} (expected 0..7)"));
@@ -1634,8 +1769,8 @@ impl GpuCore {
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("vizzy-deck-shader"),
-                source: wgpu::ShaderSource::Naga(Cow::Owned(module)),
+                label: Some("vizzy-patch-shader"),
+                source: wgpu::ShaderSource::Naga(Cow::Owned(composed.module)),
             });
         let pipeline = self
             .device
@@ -1643,8 +1778,8 @@ impl GpuCore {
                 label: Some("vizzy-deck-pipeline"),
                 layout: Some(&self.deck_pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &self.compositor,
-                    entry_point: Some("vs_fullscreen"),
+                    module: &shader,
+                    entry_point: Some("vs_patch"),
                     compilation_options: Default::default(),
                     buffers: &[],
                 },
@@ -1653,7 +1788,7 @@ impl GpuCore {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("main"),
+                    entry_point: Some("fs_patch"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::Rgba8Unorm,
@@ -1667,6 +1802,12 @@ impl GpuCore {
         if let Some(err) = tauri::async_runtime::block_on(scope.pop()) {
             return Err(err.to_string());
         }
+        self.queue.write_buffer(
+            &self.patch_params[slot],
+            0,
+            &floats_to_bytes(&composed.params),
+        );
+        self.patch_history[slot] = composed.uses_history;
         self.deck_pipelines[slot] = Some(pipeline);
         Ok(())
     }
@@ -2269,6 +2410,7 @@ impl GpuCore {
                     if let Some(pipeline) = &self.deck_pipelines[i] {
                         pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, &self.deck_bind_groups[i], &[]);
+                        pass.set_bind_group(1, &self.patch_bind_groups[i], &[]);
                         pass.draw(0..3, 0..1);
                     }
                 }
@@ -2305,6 +2447,20 @@ impl GpuCore {
                     }
                 }
                 SlotDraw::Nothing => {}
+            }
+            drop(pass);
+            // Feedback decks keep last frame's output around for the next
+            // frame's history sample.
+            if draw == SlotDraw::Shader && self.patch_history[i] {
+                encoder.copy_texture_to_texture(
+                    self.deck_textures[i].as_image_copy(),
+                    self.history_textures[i].as_image_copy(),
+                    wgpu::Extent3d {
+                        width: dw,
+                        height: dh,
+                        depth_or_array_layers: 1,
+                    },
+                );
             }
         }
 
@@ -2534,12 +2690,8 @@ fn render_loop(
     loop {
         loop {
             match jobs.try_recv() {
-                Ok(Job::Stage {
-                    slot,
-                    module,
-                    reply,
-                }) => {
-                    let result = core.set_deck_pipeline(slot, *module);
+                Ok(Job::Stage { slot, patch, reply }) => {
+                    let result = core.set_deck_patch(slot, *patch);
                     if result.is_ok() {
                         evaluator.set_content(slot, ContentAnim::Shader);
                     }
@@ -2712,6 +2864,7 @@ fn render_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wgpu::naga;
 
     #[test]
     fn frame_event_serializes_to_contract_shape() {
@@ -2857,6 +3010,41 @@ mod tests {
         data
     }
 
+    /// A ComposedPatch from a hand-written fs body (an expression yielding
+    /// vec4<f32> from `uv`), for probes that need exact pixel output.
+    fn custom_patch(fs_expr: &str) -> patch::ComposedPatch {
+        let src = format!(
+            "struct VsOut {{ @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }}
+@vertex
+fn vs_patch(@builtin(vertex_index) vi: u32) -> VsOut {{
+  let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+  let y = f32(vi & 2u) * 2.0 - 1.0;
+  var out: VsOut;
+  out.pos = vec4<f32>(x, y, 0.0, 1.0);
+  out.uv = vec2<f32>(x * 0.5 + 0.5, -y * 0.5 + 0.5);
+  return out;
+}}
+@fragment
+fn fs_patch(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{
+  return {fs_expr};
+}}
+"
+        );
+        let module = naga::front::wgsl::parse_str(&src).expect("test patch parses");
+        patch::ComposedPatch {
+            module,
+            params: [0.0; patch::PARAM_FLOATS],
+            uses_history: false,
+        }
+    }
+
+    fn stage_default_patches(core: &mut GpuCore) {
+        for slot in 0..SLOT_COUNT {
+            let composed = patch::compose(&patch::default_patch(slot)).unwrap();
+            core.set_deck_patch(slot, composed).unwrap();
+        }
+    }
+
     fn mean_luma_of_rows(rgba: &[u8], width: usize, rows: std::ops::Range<usize>) -> f64 {
         let mut sum = 0u64;
         let mut count = 0u64;
@@ -2874,16 +3062,11 @@ mod tests {
     #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
     fn gpu_full_frame_renders_and_is_upright() {
         let mut core = boot_core();
-        for (slot, phase) in ingest::DEFAULT_DECK_PHASES.iter().enumerate() {
-            let module = ingest::validate_deck_shader(&ingest::default_deck_body(*phase)).unwrap();
-            core.set_deck_pipeline(slot, module).unwrap();
-        }
-        // Orientation probe in slot 0: brightness rises with vUv.y, so the
+        stage_default_patches(&mut core);
+        // Orientation probe in slot 0: brightness rises with uv.y, so the
         // TOP of the upright image is the bright end.
-        let module =
-            ingest::validate_deck_shader("void main() { gl_FragColor = vec4(vec3(vUv.y), 1.0); }")
-                .unwrap();
-        core.set_deck_pipeline(0, module).unwrap();
+        core.set_deck_patch(0, custom_patch("vec4<f32>(vec3<f32>(uv.y), 1.0)"))
+            .unwrap();
 
         let mut frame = EvaluatedFrame::default();
         frame.slots[0].uniforms.mix = 1.0; // all other mixes default to 0
@@ -2969,10 +3152,7 @@ mod tests {
     #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
     fn gpu_offscreen_master_renders_default_decks_non_black() {
         let mut core = boot_core();
-        for (slot, phase) in ingest::DEFAULT_DECK_PHASES.iter().enumerate() {
-            let module = ingest::validate_deck_shader(&ingest::default_deck_body(*phase)).unwrap();
-            core.set_deck_pipeline(slot, module).unwrap();
-        }
+        stage_default_patches(&mut core);
         let mut frame = EvaluatedFrame::default();
         for slot in &mut frame.slots {
             slot.uniforms.mix = 1.0;
@@ -3267,17 +3447,40 @@ mod tests {
 
     #[test]
     #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_every_generator_builds_a_pipeline() {
+        let mut core = boot_core();
+        for (i, name) in patch::generator_names().iter().enumerate() {
+            let spec = patch::PatchSpec {
+                generator: (*name).to_string(),
+                warps: vec![patch::WarpSpec {
+                    kind: "kaleido".into(),
+                    amount: Some(6.0),
+                    audio: Some("low".into()),
+                }],
+                post: patch::PostSpec {
+                    trail: Some(0.8),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let composed = patch::compose(&spec).unwrap();
+            core.set_deck_patch(i % SLOT_COUNT, composed)
+                .unwrap_or_else(|e| panic!("generator {name} failed to build a pipeline:\n{e}"));
+        }
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
     fn gpu_glow_spills_past_quad_bounds_only_when_enabled() {
         let mut core = boot_core();
         // Small bright quad on black: slot 0 shader, full mix.
-        let module = ingest::validate_deck_shader(
-            "void main() {
-               float b = step(abs(vUv.x - 0.5), 0.1) * step(abs(vUv.y - 0.5), 0.1);
-               gl_FragColor = vec4(vec3(b), 1.0);
-             }",
+        core.set_deck_patch(
+            0,
+            custom_patch(
+                "vec4<f32>(vec3<f32>(step(abs(uv.x - 0.5), 0.1) * step(abs(uv.y - 0.5), 0.1)), 1.0)",
+            ),
         )
         .unwrap();
-        core.set_deck_pipeline(0, module).unwrap();
         let mut frame = EvaluatedFrame::default();
         frame.slots[0].uniforms.mix = 1.0;
 
