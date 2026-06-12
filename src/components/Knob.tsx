@@ -56,7 +56,7 @@ export function Knob({
   const [px, py] = angleToPoint(c, c, RADIUS - 4, angle);
 
   return (
-    <div className="flex w-12 select-none flex-col items-center gap-0.5">
+    <div className="flex w-12 shrink-0 select-none flex-col items-center gap-0.5">
       <svg
         width={SIZE}
         height={SIZE}

@@ -32,7 +32,7 @@ export interface ChannelFx {
   amt: number;
 }
 
-export type AutEffectKey = 'scl' | 'rot' | 'flk' | 'dst' | 'skw';
+export type AutEffectKey = 'scl' | 'rot' | 'tlt' | 'flk' | 'dst' | 'skw';
 export interface AutEffect {
   amt: number;
   audio: boolean;

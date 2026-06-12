@@ -22,7 +22,7 @@ export function animateModelDeck(
   dt: number,
   pos: ChannelPos = NO_OFFSET,
 ): void {
-  // ROT adds spin on top of a gentle always-on base rotation
+  // ROT drives the spin entirely — amt 0 parks the model where it is
   model.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
   const pulse =
     1 + aut.scl.amt * 0.5 * (aut.scl.audio ? level : 0.5 + 0.5 * Math.sin(t * 2.2));
@@ -32,8 +32,9 @@ export function animateModelDeck(
 
   model.group.position.x = pos.x;
   model.group.position.y = pos.y;
-  model.group.rotation.y = t * 0.3 + model.spin;
-  model.group.rotation.x = Math.sin(t * 0.3) * 0.2;
+  model.group.rotation.y = model.spin;
+  // the gentle nod scales with ROT too, so a parked model is truly still
+  model.group.rotation.x = aut.rot.amt * Math.sin(t * 0.3) * 0.2;
   // SKW = side lean (true shear isn't expressible in TRS transforms)
   model.group.rotation.z = aut.skw.amt * 0.5 * (aut.skw.audio ? level : Math.sin(t * 0.9));
   model.group.scale.set(
@@ -86,7 +87,7 @@ export function animateLandscapeDeck(
   pos: ChannelPos = NO_OFFSET,
 ): void {
   const baseSpeed = landscape.span / 9; // one tile every ~9s at rest
-  landscape.scroll += dt * baseSpeed * (1 + level * 1.5 + aut.rot.amt * 0);
+  landscape.scroll += dt * baseSpeed * (1 + level * 1.5);
   // tiles march toward the camera (+z) and leapfrog back when passed
   landscape.tiles.forEach((tile, i) => {
     tile.position.z = ((landscape.scroll + i * landscape.span) % (2 * landscape.span)) - landscape.span;
@@ -123,11 +124,16 @@ export function animateLandscapeDeck(
   );
 }
 
+// TLT rocks the composite tilt around the TILT knob — it works at the
+// sampling stage, so it applies to EVERY deck type.
+const tiltWobble = (aut: AutomationMap, level: number, t: number): number =>
+  aut.tlt.amt * 0.6 * (aut.tlt.audio ? level : Math.sin(t * 0.8));
+
 // Shader decks have no scene-graph to animate, so AUT modulates the deck's
 // COMPOSITE sampling around the knob-set base values: SCL = zoom pulse,
-// ROT = continuous spin (on top of the TILT knob), FLK = brightness flicker,
-// DST = sine UV warp, SKW = shear. Base values are never mutated — turning an
-// effect off lands back exactly on the knobs.
+// ROT = continuous spin (on top of the TILT knob), TLT = tilt rocking,
+// FLK = brightness flicker, DST = sine UV warp, SKW = shear. Base values are
+// never mutated — turning an effect off lands back exactly on the knobs.
 export function animateShaderComposite(
   uniforms: SlotUniforms,
   base: SlotBaseParams,
@@ -142,7 +148,12 @@ export function animateShaderComposite(
   uniforms.scale.value = base.scale * pulse;
 
   state.spin += dt * aut.rot.amt * (aut.rot.audio ? level * 8 : 1.6);
-  uniforms.fx.value.set(base.fx.x + state.spin, base.fx.y, base.fx.z, base.fx.w);
+  uniforms.fx.value.set(
+    base.fx.x + state.spin + tiltWobble(aut, level, t),
+    base.fx.y,
+    base.fx.z,
+    base.fx.w,
+  );
 
   uniforms.mix.value =
     base.mix * (1 - aut.flk.amt * (aut.flk.audio ? Math.min(1, level * 1.5) : 1) * Math.random());
@@ -153,10 +164,19 @@ export function animateShaderComposite(
   );
 }
 
-/** Non-shader decks animate in-scene — pin their composite params to base. */
-export function resetShaderComposite(uniforms: SlotUniforms, base: SlotBaseParams): void {
+/**
+ * Non-shader decks animate in-scene, so their composite params stay pinned to
+ * the knob values — except TLT, which is composite-level for every deck type.
+ */
+export function pinCompositeToBase(
+  uniforms: SlotUniforms,
+  base: SlotBaseParams,
+  aut: AutomationMap,
+  level: number,
+  t: number,
+): void {
   uniforms.scale.value = base.scale;
-  uniforms.fx.value.copy(base.fx);
+  uniforms.fx.value.set(base.fx.x + tiltWobble(aut, level, t), base.fx.y, base.fx.z, base.fx.w);
   uniforms.mix.value = base.mix;
   uniforms.warp.value.set(0, 0);
 }

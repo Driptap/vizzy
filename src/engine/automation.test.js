@@ -5,7 +5,7 @@ import {
   animateShaderComposite,
   animateSpriteDeck,
   applyLightRig,
-  resetShaderComposite,
+  pinCompositeToBase,
 } from './automation';
 import { makeDefaultAut } from '../lib/channels';
 
@@ -116,7 +116,7 @@ describe('channel position offsets', () => {
     expect(landscape.camera.position.y).toBeGreaterThanOrEqual(0.1);
   });
 
-  it('offsets a model group without touching its rotation animation', () => {
+  it('offsets a model group; with ROT at 0 the model stays parked', () => {
     const model = {
       group: {
         position: { x: 0, y: 0 },
@@ -128,8 +128,20 @@ describe('channel position offsets', () => {
       spin: 0,
     };
     animateModelDeck(model, makeDefaultAut(), 0, 1, 0.016, { x: -1, y: 0.7 });
+    animateModelDeck(model, makeDefaultAut(), 1, 2, 0.016, { x: -1, y: 0.7 });
     expect(model.group.position).toMatchObject({ x: -1, y: 0.7 });
-    expect(model.group.rotation.y).not.toBe(0);
+    // ROT 0 = no spin AND no idle nod — fully still
+    expect(model.group.rotation.y).toBe(0);
+    expect(model.group.rotation.x).toBe(0);
+
+    const aut = { ...makeDefaultAut(), rot: { amt: 1, audio: false } };
+    animateModelDeck(model, aut, 0, 2, 0.1, { x: -1, y: 0.7 });
+    expect(model.group.rotation.y).toBeCloseTo(0.16); // dt * 1.6
+    expect(model.group.rotation.x).not.toBe(0);
+
+    // turning ROT back down parks it at the angle it reached
+    animateModelDeck(model, makeDefaultAut(), 0, 3, 0.1, { x: -1, y: 0.7 });
+    expect(model.group.rotation.y).toBeCloseTo(0.16);
   });
 
   it('offsets a sprite while keeping its idle bob', () => {
@@ -201,13 +213,32 @@ describe('animateShaderComposite', () => {
   });
 });
 
-describe('resetShaderComposite', () => {
+describe('TLT — composite tilt rocking', () => {
+  it('rocks the tilt around the knob value on shader decks', () => {
+    const uniforms = makeSlotUniforms();
+    const aut = { ...makeDefaultAut(), tlt: { amt: 1, audio: true } };
+    animateShaderComposite(uniforms, makeBase(), { spin: 0 }, aut, 1, 2, 0.016);
+    expect(uniforms.fx.value.x).toBeCloseTo(0.2 + 0.6); // base + full audio rock
+    animateShaderComposite(uniforms, makeBase(), { spin: 0 }, aut, 0, 2, 0.016);
+    expect(uniforms.fx.value.x).toBeCloseTo(0.2); // silent = back on the knob
+  });
+
+  it('applies on pinned (non-shader) decks too — TLT is universal', () => {
+    const uniforms = makeSlotUniforms();
+    const aut = { ...makeDefaultAut(), tlt: { amt: 1, audio: true } };
+    pinCompositeToBase(uniforms, makeBase(), aut, 1, 2);
+    expect(uniforms.fx.value.x).toBeCloseTo(0.2 + 0.6);
+    expect(uniforms.scale.value).toBe(1.5); // everything else stays pinned
+  });
+});
+
+describe('pinCompositeToBase', () => {
   it('pins composite params back to base and zeroes the warp', () => {
     const uniforms = makeSlotUniforms();
     uniforms.scale.value = 9;
     uniforms.mix.value = 0;
     uniforms.warp.value.set(1, 1);
-    resetShaderComposite(uniforms, makeBase());
+    pinCompositeToBase(uniforms, makeBase(), makeDefaultAut(), 0, 1);
     expect(uniforms.scale.value).toBe(1.5);
     expect(uniforms.mix.value).toBe(0.8);
     expect(uniforms.fx.value.x).toBeCloseTo(0.2);

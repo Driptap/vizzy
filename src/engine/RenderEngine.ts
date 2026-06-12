@@ -17,7 +17,7 @@ import {
   animateShaderComposite,
   animateSpriteDeck,
   applyLightRig,
-  resetShaderComposite,
+  pinCompositeToBase,
 } from './automation';
 import { makeCompositeScene, sceneUniformSet, masterUniformSet } from './compositor';
 import { flipAndPremultiply } from './preview';
@@ -906,11 +906,13 @@ export class RenderEngine {
     const dt = Math.min(0.1, t - (this.lastFrameTime ?? t));
     this.lastFrameTime = t;
     this.decks.forEach((deck, i) => {
+      const level = this.deckAudioUniforms[i].u_audio_level.value;
+
       // Composite-stage automation: shader decks have no scene-graph, so AUT
       // modulates their sampling params; everything else animates in-scene
-      // and keeps its composite params pinned to the knob values.
+      // and keeps its composite params pinned to the knob values (TLT excepted
+      // — tilt rocking is composite-level for every deck type).
       if (deck.mode === 'shader') {
-        const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateShaderComposite(
           this.slotUniforms[i],
           this.baseParams[i],
@@ -921,21 +923,18 @@ export class RenderEngine {
           dt,
         );
       } else {
-        resetShaderComposite(this.slotUniforms[i], this.baseParams[i]);
+        pinCompositeToBase(this.slotUniforms[i], this.baseParams[i], this.automation[i], level, t);
       }
 
       this.renderer.setRenderTarget(deck.target);
       if (deck.mode === 'model' && deck.model) {
-        const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateModelDeck(deck.model, this.automation[i], level, t, dt, this.positions[i]);
         applyLightRig(deck.model.rig, this.lighting[i]);
         this.renderer.render(deck.model.scene, this.modelCamera);
       } else if (deck.mode === 'sprite' && deck.sprite) {
-        const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt, this.positions[i]);
         this.renderer.render(deck.sprite.scene, this.camera);
       } else if ((deck.mode === 'landscape' || deck.mode === 'scene') && deck.landscape) {
-        const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateLandscapeDeck(deck.landscape, this.automation[i], level, t, dt, this.positions[i]);
         if (deck.landscape.rig) applyLightRig(deck.landscape.rig, this.lighting[i]);
         this.renderer.render(deck.landscape.scene, deck.landscape.camera);

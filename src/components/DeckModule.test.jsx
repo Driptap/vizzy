@@ -23,7 +23,7 @@ const defaultProps = () => ({
   fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
   onFxChange: vi.fn(),
   aut: Object.fromEntries(
-    ['scl', 'rot', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]),
+    ['scl', 'rot', 'tlt', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]),
   ),
   onAutChange: vi.fn(),
   onGenerate: vi.fn(),
@@ -199,8 +199,9 @@ describe('DeckModule tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AUT' }));
     expect(screen.getByRole('slider', { name: 'ROT' })).toBeInTheDocument();
 
+    expect(screen.getByRole('slider', { name: 'TLT' })).toBeInTheDocument();
     const couplers = screen.getAllByRole('button', { name: '♪' });
-    expect(couplers).toHaveLength(5);
+    expect(couplers).toHaveLength(6);
     fireEvent.click(couplers[1]); // rot
     expect(onAutChange).toHaveBeenCalledWith(0, 'rot', 'audio', true);
   });

@@ -98,7 +98,7 @@ describe('seedExampleLibrary', () => {
         size: { x: expect.any(Number), y: expect.any(Number) },
         fx: expect.objectContaining({ band: expect.any(String), contrast: expect.any(Number) }),
       });
-      expect(Object.keys(ch.aut).sort()).toEqual(['dst', 'flk', 'rot', 'scl', 'skw']);
+      expect(Object.keys(ch.aut).sort()).toEqual(['dst', 'flk', 'rot', 'scl', 'skw', 'tlt']);
       expect(ch.opacity).toBeGreaterThanOrEqual(0);
     });
     // channel 1 starts audible so the seeded deck is visible immediately

@@ -26,7 +26,7 @@ export const DEFAULT_LAYER = 4;
 // channel automation (sprites AND models): per effect {amt: 0..1, audio: bool}
 // — audio couples the effect to the deck's routed level, otherwise it
 // self-runs on time LFOs
-export const AUT_KEYS: AutEffectKey[] = ['scl', 'rot', 'flk', 'dst', 'skw'];
+export const AUT_KEYS: AutEffectKey[] = ['scl', 'rot', 'tlt', 'flk', 'dst', 'skw'];
 export const makeDefaultAut = (): AutomationMap =>
   Object.fromEntries(AUT_KEYS.map((k) => [k, { amt: 0, audio: false }])) as AutomationMap;
 

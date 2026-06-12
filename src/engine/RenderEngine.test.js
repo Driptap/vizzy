@@ -372,6 +372,7 @@ describe('shader-deck composite automation', () => {
     engine.setAutomation(0, {
       scl: { amt: 1, audio: true },
       rot: { amt: 1, audio: true },
+      tlt: { amt: 0, audio: false },
       flk: { amt: 0, audio: false },
       dst: { amt: 1, audio: true },
       skw: { amt: 1, audio: true },
@@ -408,6 +409,7 @@ describe('shader-deck composite automation', () => {
     engine.setAutomation(1, {
       scl: { amt: 1, audio: true },
       rot: { amt: 1, audio: true },
+      tlt: { amt: 0, audio: false },
       flk: { amt: 0, audio: false },
       dst: { amt: 1, audio: true },
       skw: { amt: 1, audio: true },

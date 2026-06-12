@@ -32,6 +32,7 @@ const LIT_SOURCES: SourceType[] = ['model', 'landscape', 'scene'];
 const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'scl', label: 'SCL', title: 'Scaling' },
   { key: 'rot', label: 'ROT', title: 'Rotation' },
+  { key: 'tlt', label: 'TLT', title: 'Tilt rocking (composite — works on every deck type)' },
   { key: 'flk', label: 'FLK', title: 'Flicker' },
   { key: 'dst', label: 'DST', title: 'Distortion' },
   { key: 'skw', label: 'SKW', title: 'Skew' },
@@ -299,7 +300,7 @@ export function DeckModule({
         </div>
       </div>
 
-      <div className="flex h-20 items-center justify-evenly">
+      <div className="flex h-20 items-center justify-evenly gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {effectiveTab === 'XFRM' && (
           <>
             <Knob
