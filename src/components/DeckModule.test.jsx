@@ -15,6 +15,10 @@ const defaultProps = () => ({
   onSizeChange: vi.fn(),
   pos: { x: 0, y: 0 },
   onPosChange: vi.fn(),
+  light: { brightness: 1, angle: 0 },
+  onLightChange: vi.fn(),
+  layer: 4,
+  onLayerChange: vi.fn(),
   sourceType: 'shader',
   fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
   onFxChange: vi.fn(),
@@ -49,16 +53,27 @@ describe('DeckModule generation', () => {
     expect(onPromptChange).toHaveBeenCalledWith(0, 'a fractal');
   });
 
+  it('the SCENE toggle switches what Generate produces', () => {
+    const { onGenerate } = renderDeck({ prompt: 'crystal canyon' });
+    fireEvent.click(screen.getByRole('button', { name: 'SCENE' }));
+    expect(screen.getByRole('button', { name: 'SCENE' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    expect(onGenerate).toHaveBeenCalledWith(0, 'crystal canyon', 'scene');
+    fireEvent.click(screen.getByRole('button', { name: 'GLSL' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    expect(onGenerate).toHaveBeenLastCalledWith(0, 'crystal canyon', 'shader');
+  });
+
   it('Generate sends the trimmed prompt', () => {
     const { onGenerate } = renderDeck({ prompt: '  neon waves  ', index: 2 });
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
-    expect(onGenerate).toHaveBeenCalledWith(2, 'neon waves');
+    expect(onGenerate).toHaveBeenCalledWith(2, 'neon waves', 'shader');
   });
 
   it('Cmd/Ctrl+Enter in the prompt generates', () => {
     const { onGenerate } = renderDeck({ prompt: 'pulse' });
     fireEvent.keyDown(promptBox(), { key: 'Enter', metaKey: true });
-    expect(onGenerate).toHaveBeenCalledWith(0, 'pulse');
+    expect(onGenerate).toHaveBeenCalledWith(0, 'pulse', 'shader');
     fireEvent.keyDown(promptBox(), { key: 'Enter' }); // plain Enter = newline
     expect(onGenerate).toHaveBeenCalledTimes(1);
   });
@@ -80,10 +95,10 @@ describe('DeckModule generation', () => {
     expect(screen.getByText('Compile Failed')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '⟲ Regenerate' }));
-    expect(onRegenerate).toHaveBeenCalledWith(0, 'broken thing');
+    expect(onRegenerate).toHaveBeenCalledWith(0, 'broken thing', 'shader');
 
     fireEvent.click(screen.getByRole('button', { name: 'Start fresh' }));
-    expect(onGenerate).toHaveBeenCalledWith(0, 'broken thing');
+    expect(onGenerate).toHaveBeenCalledWith(0, 'broken thing', 'shader');
   });
 
   it('shows the scene letter with the channel number', () => {
@@ -188,6 +203,37 @@ describe('DeckModule tabs', () => {
     expect(couplers).toHaveLength(5);
     fireEvent.click(couplers[1]); // rot
     expect(onAutChange).toHaveBeenCalledWith(0, 'rot', 'audio', true);
+  });
+
+  it('the layer switch shows the assignment and reports changes', () => {
+    const { onLayerChange } = renderDeck({ index: 3, layer: 2 });
+    expect(screen.getByRole('button', { name: 'Layer 2' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Layer 4' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Layer 1' }));
+    expect(onLayerChange).toHaveBeenCalledWith(3, 1);
+  });
+
+  it('LIGHT tab appears only for lit decks and reports brightness/direction', () => {
+    renderDeck();
+    expect(screen.queryByRole('button', { name: 'LIGHT' })).not.toBeInTheDocument();
+
+    renderDeck({ sourceType: 'scene', index: 1 });
+    expect(screen.getByRole('button', { name: 'LIGHT' })).toBeInTheDocument();
+
+    const { onLightChange } = renderDeck({ sourceType: 'model', index: 2 });
+    fireEvent.click(screen.getAllByRole('button', { name: 'LIGHT' })[1]);
+    fireEvent.wheel(screen.getByRole('slider', { name: 'BRT' }), { deltaY: -1 });
+    expect(onLightChange).toHaveBeenCalledWith(2, 'brightness', 1 + 2 / 50);
+    fireEvent.doubleClick(screen.getByRole('slider', { name: 'DIR' }));
+    expect(onLightChange).toHaveBeenCalledWith(2, 'angle', 0);
+  });
+
+  it('falls back to XFRM when a lit deck loses its LIGHT tab', () => {
+    const props = { ...defaultProps(), sourceType: 'landscape' };
+    const { rerender } = render(<DeckModule {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'LIGHT' }));
+    rerender(<DeckModule {...props} sourceType="shader" />);
+    expect(screen.getByRole('slider', { name: 'SCALE' })).toBeInTheDocument();
   });
 
   it('AUT tab is available on every deck (shader decks animate at the composite)', () => {

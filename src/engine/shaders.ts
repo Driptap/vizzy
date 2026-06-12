@@ -64,7 +64,9 @@ vec2 zoomUv(vec2 uv, float s) {
 // shearing; hue rotates RGB about the grey axis (Rodrigues).
 // warp carries the engine-driven AUT effects for shader decks: x = sine UV
 // distortion, y = shear — both zero when idle, so the fast path is unchanged.
-vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx, vec2 warp) {
+// Returns premultiplied colour in rgb and COVERAGE in a (texture alpha masked
+// by the channel window) — coverage feeds the layer compositor below.
+vec4 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx, vec2 warp) {
   vec2 local = (uv - 0.5) / max(size, vec2(0.001)) + 0.5;
   vec2 inside = step(vec2(0.0), local) * step(local, vec2(1.0));
   float tc = cos(fx.x);
@@ -86,7 +88,27 @@ vec3 deckColor(sampler2D tex, vec2 uv, float zoom, vec2 size, vec4 fx, vec2 warp
   col = col * hc + cross(k, col) * hs + k * dot(k, col) * (1.0 - hc);
   float luma = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(vec3(luma), col, fx.w);
-  return max(col, vec3(0.0)) * inside.x * inside.y;
+  float mask = inside.x * inside.y;
+  return vec4(max(col, vec3(0.0)) * mask, t.a * mask);
+}
+
+// Layer compositor for one scene's 4 decks (already faded by their mixes).
+// Layers stack 4 (base) up to 1 (top): decks SHARING a layer sum additively
+// (the classic mixer behaviour), each higher layer sits OVER the result
+// using its coverage — an image's transparency cuts out what's beneath.
+vec3 layerStack(vec4 d1, vec4 d2, vec4 d3, vec4 d4, float l1, float l2, float l3, float l4) {
+  vec3 acc = vec3(0.0);
+  for (int L = 4; L >= 1; L -= 1) {
+    float fL = float(L);
+    float on1 = step(abs(l1 - fL), 0.5);
+    float on2 = step(abs(l2 - fL), 0.5);
+    float on3 = step(abs(l3 - fL), 0.5);
+    float on4 = step(abs(l4 - fL), 0.5);
+    vec3 col = d1.rgb * on1 + d2.rgb * on2 + d3.rgb * on3 + d4.rgb * on4;
+    float cov = min(1.0, d1.a * on1 + d2.a * on2 + d3.a * on3 + d4.a * on4);
+    acc = col + acc * (1.0 - cov);
+  }
+  return acc;
 }
 `;
 
@@ -137,7 +159,7 @@ uniform vec4 u_fx;
 uniform vec2 u_warp;
 ${DECK_SAMPLING}
 void main() {
-  gl_FragColor = vec4(deckColor(u_tex, vUv, u_scale, u_size, u_fx, u_warp), 1.0);
+  gl_FragColor = vec4(deckColor(u_tex, vUv, u_scale, u_size, u_fx, u_warp).rgb, 1.0);
 }
 `;
 
@@ -169,12 +191,17 @@ uniform vec2 u_warp1;
 uniform vec2 u_warp2;
 uniform vec2 u_warp3;
 uniform vec2 u_warp4;
+uniform float u_layer1;
+uniform float u_layer2;
+uniform float u_layer3;
+uniform float u_layer4;
 ${DECK_SAMPLING}
 void main() {
-  vec3 c = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1
-         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2
-         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3
-         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
+  vec4 d1 = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1;
+  vec4 d2 = deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2;
+  vec4 d3 = deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3;
+  vec4 d4 = deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
+  vec3 c = layerStack(d1, d2, d3, d4, u_layer1, u_layer2, u_layer3, u_layer4);
   gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
 }
 `;
@@ -230,17 +257,27 @@ uniform vec2 u_warp5;
 uniform vec2 u_warp6;
 uniform vec2 u_warp7;
 uniform vec2 u_warp8;
+uniform float u_layer1;
+uniform float u_layer2;
+uniform float u_layer3;
+uniform float u_layer4;
+uniform float u_layer5;
+uniform float u_layer6;
+uniform float u_layer7;
+uniform float u_layer8;
 uniform float u_xfade; // 0.0 = scene A (decks 1-4), 1.0 = scene B (decks 5-8)
 ${DECK_SAMPLING}
 void main() {
-  vec3 a = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1
-         + deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2
-         + deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3
-         + deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
-  vec3 b = deckColor(u_deck5, vUv, u_scale5, u_size5, u_fx5, u_warp5) * u_mix5
-         + deckColor(u_deck6, vUv, u_scale6, u_size6, u_fx6, u_warp6) * u_mix6
-         + deckColor(u_deck7, vUv, u_scale7, u_size7, u_fx7, u_warp7) * u_mix7
-         + deckColor(u_deck8, vUv, u_scale8, u_size8, u_fx8, u_warp8) * u_mix8;
+  vec4 d1 = deckColor(u_deck1, vUv, u_scale1, u_size1, u_fx1, u_warp1) * u_mix1;
+  vec4 d2 = deckColor(u_deck2, vUv, u_scale2, u_size2, u_fx2, u_warp2) * u_mix2;
+  vec4 d3 = deckColor(u_deck3, vUv, u_scale3, u_size3, u_fx3, u_warp3) * u_mix3;
+  vec4 d4 = deckColor(u_deck4, vUv, u_scale4, u_size4, u_fx4, u_warp4) * u_mix4;
+  vec4 d5 = deckColor(u_deck5, vUv, u_scale5, u_size5, u_fx5, u_warp5) * u_mix5;
+  vec4 d6 = deckColor(u_deck6, vUv, u_scale6, u_size6, u_fx6, u_warp6) * u_mix6;
+  vec4 d7 = deckColor(u_deck7, vUv, u_scale7, u_size7, u_fx7, u_warp7) * u_mix7;
+  vec4 d8 = deckColor(u_deck8, vUv, u_scale8, u_size8, u_fx8, u_warp8) * u_mix8;
+  vec3 a = layerStack(d1, d2, d3, d4, u_layer1, u_layer2, u_layer3, u_layer4);
+  vec3 b = layerStack(d5, d6, d7, d8, u_layer5, u_layer6, u_layer7, u_layer8);
   vec3 c = a * (1.0 - u_xfade) + b * u_xfade;
   gl_FragColor = vec4(min(c, vec3(1.0)), 1.0);
 }

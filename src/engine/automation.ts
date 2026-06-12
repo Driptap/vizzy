@@ -2,9 +2,10 @@
 // {amt: 0..1, audio: bool}: audio couples it to the deck's routed level,
 // otherwise it self-runs on time LFOs.
 import type { AutomationMap } from '../types';
-import type { ChannelPos } from '../types';
+import type { ChannelLight, ChannelPos } from '../types';
 import type {
   LandscapeDeckContent,
+  LightRig,
   ModelDeckContent,
   SlotBaseParams,
   SlotUniforms,
@@ -96,17 +97,22 @@ export function animateLandscapeDeck(
   });
 
   // POS pans the whole camera track: x slides it sideways (lookAt follows so
-  // it translates rather than turns), y raises/lowers the fly-over height,
-  // floored so the camera never dives under the terrain.
+  // it translates rather than turns), y raises/lowers the flight height.
+  // Fly-over is floored so the camera never dives under the terrain;
+  // fly-through (tunnels) aims straight down the axis instead.
   const cam = landscape.camera;
   const sway = aut.rot.amt * 0.6 * (aut.rot.audio ? level : Math.sin(t * 0.4));
   const shake = aut.dst.amt * (aut.dst.audio ? level : 0.5 + 0.5 * Math.sin(t * 1.3));
-  cam.position.x = pos.x + Math.sin(t * 0.23) * 0.4 + shake * 0.12 * Math.sin(t * 31.0);
-  cam.position.y = Math.max(
-    0.1,
-    landscape.camHeight + pos.y + Math.sin(t * 0.6) * 0.08 + shake * 0.1 * Math.cos(t * 27.0),
-  );
-  cam.lookAt(pos.x + sway * 3, Math.max(0.05, (landscape.camHeight + pos.y) * 0.45), -6);
+  const bobX = Math.sin(t * 0.23) * 0.4 + shake * 0.12 * Math.sin(t * 31.0);
+  const bobY = Math.sin(t * 0.6) * 0.08 + shake * 0.1 * Math.cos(t * 27.0);
+  cam.position.x = pos.x + bobX;
+  if (landscape.fly === 'through') {
+    cam.position.y = landscape.camHeight + pos.y + bobY;
+    cam.lookAt(pos.x + sway * 3, landscape.camHeight + pos.y, -6);
+  } else {
+    cam.position.y = Math.max(0.1, landscape.camHeight + pos.y + bobY);
+    cam.lookAt(pos.x + sway * 3, Math.max(0.05, (landscape.camHeight + pos.y) * 0.45), -6);
+  }
   // SKW = roll lean, applied after lookAt so it isn't overwritten
   cam.rotation.z += aut.skw.amt * 0.4 * (aut.skw.audio ? level : Math.sin(t * 0.9));
 
@@ -153,4 +159,19 @@ export function resetShaderComposite(uniforms: SlotUniforms, base: SlotBaseParam
   uniforms.fx.value.copy(base.fx);
   uniforms.mix.value = base.mix;
   uniforms.warp.value.set(0, 0);
+}
+
+// Channel light controls for lit decks: brightness scales the whole rig,
+// angle orbits the key light around the vertical axis (the rim stays put so
+// the silhouette edge survives any key direction).
+export function applyLightRig(rig: LightRig, light: ChannelLight): void {
+  rig.ambient.intensity = rig.ambientBase * light.brightness;
+  rig.key.intensity = rig.keyBase * light.brightness;
+  rig.rim.intensity = rig.rimBase * light.brightness;
+  const angle = rig.keyBaseAngle + light.angle;
+  rig.key.position.set(
+    rig.keyRadius * Math.sin(angle),
+    rig.keyHeight,
+    rig.keyRadius * Math.cos(angle),
+  );
 }

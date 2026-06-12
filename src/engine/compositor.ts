@@ -30,6 +30,7 @@ const slotEntries = (uniforms: UniformSet, slot: SlotUniforms, n: number): void 
   uniforms[`u_size${n}`] = slot.size;
   uniforms[`u_fx${n}`] = slot.fx;
   uniforms[`u_warp${n}`] = slot.warp;
+  uniforms[`u_layer${n}`] = slot.layer;
 };
 
 /** Uniform set for one scene's 4-deck composite (channels named 1-4). */

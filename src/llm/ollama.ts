@@ -141,6 +141,8 @@ interface GenerationJob {
   prompt: string;
   onResponse: (raw: string) => void;
   repair: RepairContext | null;
+  /** overrides the GLSL system prompt (e.g. procedural scene generation) */
+  system: string | null;
 }
 
 interface GenerationQueueOptions {
@@ -177,10 +179,11 @@ export class GenerationQueue {
     prompt: string,
     onResponse: (raw: string) => void,
     repair: RepairContext | null = null,
+    system: string | null = null,
   ): void {
     // a re-click replaces that deck's pending job rather than stacking
     this.queue = this.queue.filter((job) => job.deckIndex !== deckIndex);
-    this.queue.push({ deckIndex, prompt, onResponse, repair });
+    this.queue.push({ deckIndex, prompt, onResponse, repair, system });
     this.onStatus(deckIndex, 'queued');
     this.pump();
   }
@@ -193,7 +196,7 @@ export class GenerationQueue {
 
     try {
       this.onStatus(job.deckIndex, 'generating');
-      const raw = await this.request(job.prompt, job.repair);
+      const raw = await this.request(job.prompt, job.repair, job.system);
       job.onResponse(raw);
     } catch (err) {
       console.error('[Vizzy] Generation failed:', err);
@@ -204,14 +207,21 @@ export class GenerationQueue {
     }
   }
 
-  async request(userPrompt: string, repair: RepairContext | null = null): Promise<string> {
+  async request(
+    userPrompt: string,
+    repair: RepairContext | null = null,
+    systemOverride: string | null = null,
+  ): Promise<string> {
     // Append at most ONE style recipe, and only when the prompt matches —
     // keeps the local model's context small while raising genre quality.
-    const recipe = selectRecipe(userPrompt);
+    // A system override (scene generation) replaces all of that wholesale.
+    const recipe = systemOverride ? null : selectRecipe(userPrompt);
     if (recipe) console.log(`[Vizzy] Style recipe matched: ${recipe.title}`);
-    const system = recipe
-      ? `${SYSTEM_PROMPT}\n\n## Style guidance — ${recipe.title}\n${recipe.guidance}`
-      : SYSTEM_PROMPT;
+    const system =
+      systemOverride ??
+      (recipe
+        ? `${SYSTEM_PROMPT}\n\n## Style guidance — ${recipe.title}\n${recipe.guidance}`
+        : SYSTEM_PROMPT);
 
     let fullPrompt = `${system}\n\nUser request: ${userPrompt}`;
     if (repair) {

@@ -2,6 +2,7 @@
 // library assignment, deck-preset loading and session restore alike.
 import { loadModelObject } from './modelLoader';
 import { loadSpriteTexture } from './spriteLoader';
+import { buildSceneObject } from './sceneGenerator';
 import { getModelFilePath, getSpriteFilePath } from './shaderLibrary';
 import type { RenderEngine } from '../engine/RenderEngine';
 import type {
@@ -9,6 +10,8 @@ import type {
   DeckChannelConfig,
   LibraryEntry,
   ModelEntry,
+  SceneEntry,
+  SceneSpec,
   SpriteEntry,
   StageResult,
   StageableSource,
@@ -30,6 +33,10 @@ export async function stageSource(
       }
       return { ok: true };
     }
+    if (source.type === 'scene') {
+      await engine.stageScene(slot, buildSceneObject(source.spec), source.spec);
+      return { ok: true };
+    }
     if (source.type === 'sprite') {
       const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(source.entry));
       engine.stageSprite(slot, texture, aspect, source.entry.id);
@@ -39,7 +46,7 @@ export async function stageSource(
     return result?.ok ? { ok: true } : { ok: false, error: result?.error || 'Compile failed' };
   } catch (err) {
     console.error(`[Vizzy] Staging ${source.type} failed:`, err);
-    const fallback = source.type === 'model' ? 'Model load failed' : 'Image load failed';
+    const fallback = source.type === 'sprite' ? 'Image load failed' : 'Content load failed';
     return { ok: false, error: (err as Error).message || fallback };
   }
 }
@@ -60,9 +67,22 @@ export function resolveSourceRef(
     spriteId?: string;
     shaderId?: string;
     landscapeId?: string;
+    sceneId?: string;
     type?: string;
     code?: string | null;
+    spec?: SceneSpec;
   };
+  // procedural scenes: session sources carry the spec inline, deck presets
+  // reference a library scene entry by id
+  if (anyRef.type === 'scene' && anyRef.spec) {
+    return { source: { type: 'scene', spec: anyRef.spec } };
+  }
+  if (anyRef.sceneId) {
+    const entry = byId.get(anyRef.sceneId);
+    return entry && entry.kind === 'scene'
+      ? { source: { type: 'scene', spec: (entry as SceneEntry).spec } }
+      : { error: 'Saved scene is missing from the library' };
+  }
   // landscape refs reuse model entries: deck presets carry landscapeId, session
   // sources carry {type: 'landscape', modelId} — both must resolve BEFORE the
   // plain-model checks or a landscape would restore as a spinning model.

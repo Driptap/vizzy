@@ -14,7 +14,7 @@ export interface DeckUiState {
   error: string | null;
 }
 
-export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape';
+export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape' | 'scene';
 export type AudioBand = 'low' | 'mid' | 'high' | 'level';
 export interface AudioLevels {
   low: number;
@@ -50,6 +50,14 @@ export interface ChannelPos {
   y: number;
 }
 
+/** Light rig controls for lit decks (3D models, mesh landscapes). */
+export interface ChannelLight {
+  /** master intensity multiplier, 0..2 (1 = the built-in rig) */
+  brightness: number;
+  /** key-light orbit around the vertical axis, degrees */
+  angle: number;
+}
+
 /** The full per-channel config carried by deck presets and session slots. */
 export interface ChannelConfig {
   prompt: string;
@@ -58,8 +66,27 @@ export interface ChannelConfig {
   scale: number;
   size: ChannelSize;
   pos: ChannelPos;
+  light: ChannelLight;
+  /** compositing layer 1 (top) .. 4 (base) */
+  layer: number;
   fx: ChannelFx;
   aut: AutomationMap;
+}
+
+// ---- procedural fly-through scenes ----
+
+/**
+ * An LLM-generated fly-through scene: a surface expression evaluated over a
+ * grid (terrain height h(x,z), or tunnel wall offset r(a,z)) plus a palette.
+ * The expression language is the safe subset compiled by lib/expr.
+ */
+export interface SceneSpec {
+  kind: 'terrain' | 'tunnel';
+  surface: string;
+  /** vertical relief (terrain) / wall modulation depth (tunnel), world units */
+  amplitude: number;
+  /** [low/wall colour, high/glow colour, fog colour] as #rrggbb */
+  palette: [string, string, string];
 }
 
 // ---- library entries (one JSON file each in <userData>/shaders/) ----
@@ -92,8 +119,15 @@ export interface SpriteEntry extends EntryBase {
   file: string;
 }
 
+export interface SceneEntry extends EntryBase {
+  kind: 'scene';
+  spec: SceneSpec;
+  /** the prompt that generated it, for re-rolls */
+  prompt?: string;
+}
+
 export type AssetEntry = ModelEntry | SpriteEntry;
-export type LibraryEntry = ShaderEntry | DeckEntry | ModelEntry | SpriteEntry;
+export type LibraryEntry = ShaderEntry | DeckEntry | ModelEntry | SpriteEntry | SceneEntry;
 
 /** A deck-preset channel: config plus a reference to what was running. */
 export type DeckChannelConfig = Partial<ChannelConfig> & {
@@ -102,6 +136,8 @@ export type DeckChannelConfig = Partial<ChannelConfig> & {
   spriteId?: string;
   /** a model entry staged in landscape mode (fly-over terrain) */
   landscapeId?: string;
+  /** a procedural scene entry */
+  sceneId?: string;
 };
 
 // ---- engine channel sources & staging ----
@@ -111,14 +147,16 @@ export type ChannelSource =
   | { type: 'shader'; code: string | null }
   | { type: 'model'; modelId: string }
   | { type: 'sprite'; spriteId: string }
-  | { type: 'landscape'; modelId: string };
+  | { type: 'landscape'; modelId: string }
+  | { type: 'scene'; spec: SceneSpec };
 
 /** A resolved, ready-to-stage source. */
 export type StageableSource =
   | { type: 'shader'; code: string }
   | { type: 'model'; entry: ModelEntry }
   | { type: 'sprite'; entry: SpriteEntry }
-  | { type: 'landscape'; entry: ModelEntry };
+  | { type: 'landscape'; entry: ModelEntry }
+  | { type: 'scene'; spec: SceneSpec };
 
 export type StageResult = { ok: true } | { ok: false; error: string };
 

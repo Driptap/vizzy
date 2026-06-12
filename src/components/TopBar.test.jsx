@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { MODEL_CATALOG } from '../llm/models';
 
@@ -22,6 +22,7 @@ const defaultProps = () => ({
   onToggleMidiLearn: vi.fn(),
   midiInputs: 0,
   onOpenTutorial: vi.fn(),
+  onResetRig: vi.fn(),
 });
 
 const renderTopBar = (overrides = {}) => {
@@ -107,6 +108,31 @@ describe('TopBar', () => {
   it('starts in custom mode when the model is not in the catalog', () => {
     renderTopBar({ model: 'some-local-model' });
     expect(screen.getByPlaceholderText('any ollama tag')).toHaveValue('some-local-model');
+  });
+
+  it('Reset Rig requires a confirming second click', () => {
+    const { onResetRig } = renderTopBar();
+    const button = screen.getByRole('button', { name: 'Reset Rig' });
+    fireEvent.click(button);
+    expect(onResetRig).not.toHaveBeenCalled(); // armed, not fired
+    fireEvent.click(screen.getByRole('button', { name: 'Sure? Click again' }));
+    expect(onResetRig).toHaveBeenCalledTimes(1);
+    // back to the resting label after firing
+    expect(screen.getByRole('button', { name: 'Reset Rig' })).toBeInTheDocument();
+  });
+
+  it('an armed reset disarms itself after 3 seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const { onResetRig } = renderTopBar();
+      fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
+      act(() => vi.advanceTimersByTime(3100));
+      // the next click only re-arms — the timeout cancelled the confirmation
+      fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
+      expect(onResetRig).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens the tutorial', () => {

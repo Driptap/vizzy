@@ -14,6 +14,7 @@ vi.mock('three', () => {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
     set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
     setScalar(s) { return this.set(s, s, s); }
+    copy(v) { return this.set(v.x, v.y, v.z); }
     sub(v) { this.x -= v.x; this.y -= v.y; this.z -= v.z; return this; }
   }
   class Vector4 {
@@ -104,7 +105,13 @@ vi.mock('three', () => {
     getSize(v) { return v.set(2, 2, 2); }
     getCenter(v) { return v.set(0, 0, 0); }
   }
-  class Light extends Object3D { constructor() { super(); } }
+  class Light extends Object3D {
+    constructor(color, intensity = 1) {
+      super();
+      this.color = color;
+      this.intensity = intensity;
+    }
+  }
   return {
     Vector2,
     Vector3,
@@ -178,6 +185,18 @@ describe('uniform setters', () => {
     expect(slot.size.value).toMatchObject({ x: 0.5, y: 0.25 });
     expect(slot.fx.value).toMatchObject({ x: 0.1, y: 1.2, z: -0.3, w: 0.8 });
     expect(engine.xfadeUniform.value).toBe(0.4);
+  });
+
+  it('decks start on the base layer and setLayer reaches every composite', () => {
+    const engine = makeEngine();
+    engine.slotUniforms.forEach((u) => expect(u.layer.value).toBe(4));
+
+    engine.setLayer(5, 1); // scene B channel 2 to the top
+    const sceneB = engine.sceneComposites[1].children[0].material.uniforms;
+    const master = engine.masterComposite.children[0].material.uniforms;
+    expect(sceneB.u_layer2.value).toBe(1);
+    expect(master.u_layer6.value).toBe(1);
+    expect(sceneB.u_layer2).toBe(master.u_layer6); // shared by reference
   });
 
   it('slot uniforms are shared by reference with scene and master composites', () => {
@@ -474,6 +493,62 @@ describe('stageLandscape', () => {
   });
 });
 
+describe('stageScene', () => {
+  const makeObject = async () => {
+    const { Group } = await import('three');
+    return new Group();
+  };
+  const terrainSpec = {
+    kind: 'terrain',
+    surface: 'sin(x)',
+    amplitude: 2,
+    palette: ['#ff71ce', '#01cdfe', '#1a0533'],
+  };
+  const tunnelSpec = { ...terrainSpec, kind: 'tunnel' };
+
+  it('terrain scenes fly over with the spec exposed as the channel source', async () => {
+    const engine = makeEngine();
+    const result = await engine.stageScene(2, await makeObject(), terrainSpec);
+    expect(result).toEqual({ ok: true });
+    expect(engine.decks[2].mode).toBe('scene');
+    expect(engine.getChannelSource(2)).toEqual({ type: 'scene', spec: terrainSpec });
+
+    const content = engine.decks[2].landscape;
+    expect(content.fly).toBe('over');
+    expect(content.spec).toBe(terrainSpec);
+    expect(content.scene.fog.color).toBe('#1a0533'); // fog takes the palette colour
+  });
+
+  it('tunnel scenes fly through the axis (camera centred, not grounded)', async () => {
+    const engine = makeEngine();
+    await engine.stageScene(3, await makeObject(), tunnelSpec);
+    const content = engine.decks[3].landscape;
+    expect(content.fly).toBe('through');
+    expect(content.camHeight).toBe(0);
+    expect(content.camera.position.y).toBe(0);
+  });
+
+  it('scene decks animate through the shared flight loop', async () => {
+    const engine = makeEngine({ audio: { update: () => ({ low: 0, mid: 0, high: 0, level: 0.5 }) } });
+    await engine.stageScene(0, await makeObject(), tunnelSpec);
+    const content = engine.decks[0].landscape;
+    engine.renderer.render.mockClear();
+    engine.loop();
+    engine.loop();
+    expect(content.scroll).toBeGreaterThan(0);
+    expect(engine.renderer.render).toHaveBeenCalledWith(content.scene, content.camera);
+  });
+
+  it('a scene replaces a landscape and is cleared by a shader stage', async () => {
+    const engine = makeEngine();
+    await engine.stageLandscape(1, await makeObject(), 'model-1');
+    await engine.stageScene(1, await makeObject(), terrainSpec);
+    expect(engine.getChannelSource(1).type).toBe('scene');
+    engine.stageShader(1, 'void main() { gl_FragColor = vec4(1.0); }');
+    expect(engine.decks[1].landscape).toBeNull();
+  });
+});
+
 describe('aspect settling', () => {
   it('only reallocates deck targets after the aspect holds steady', () => {
     const engine = makeEngine();
@@ -508,6 +583,78 @@ describe('aspect settling', () => {
     const initial = engine.appliedAspect;
     for (let i = 0; i < 30; i += 1) engine.maybeResizeDecks(initial + 0.005);
     expect(engine.appliedAspect).toBe(initial);
+  });
+});
+
+describe('channel lighting', () => {
+  const makeObject = async () => {
+    const { Group } = await import('three');
+    return new Group();
+  };
+
+  it('the loop applies brightness and key orbit to a model deck rig', async () => {
+    const engine = makeEngine();
+    await engine.stageModel(0, await makeObject(), 'model-1');
+    engine.setLighting(0, 0.5, Math.PI);
+    engine.loop();
+
+    const rig = engine.decks[0].model.rig;
+    expect(rig.key.intensity).toBeCloseTo(1.6 * 0.5);
+    expect(rig.ambient.intensity).toBeCloseTo(0.5 * 0.5);
+    // orbited half a turn from (2, _, 4)
+    expect(rig.key.position.x).toBeCloseTo(-2);
+    expect(rig.key.position.z).toBeCloseTo(-4);
+    expect(rig.key.position.y).toBeCloseTo(3);
+  });
+
+  it('mesh landscapes and procedural scenes are both lit and adjustable', async () => {
+    const engine = makeEngine();
+    await engine.stageLandscape(1, await makeObject(), 'model-1');
+    expect(engine.decks[1].landscape.rig).toBeTruthy();
+    engine.setLighting(1, 2, 0);
+    engine.loop();
+    expect(engine.decks[1].landscape.rig.key.intensity).toBeCloseTo(1.4 * 2);
+
+    await engine.stageScene(2, await makeObject(), {
+      kind: 'terrain',
+      surface: 'sin(x)',
+      amplitude: 2,
+      palette: ['#111111', '#222222', '#333333'],
+    });
+    const sceneRig = engine.decks[2].landscape.rig;
+    expect(sceneRig).toBeTruthy();
+    expect(sceneRig.keyBase).toBeCloseTo(0.8); // ambient-heavy scene rig
+    engine.setLighting(2, 0.5, 0);
+    engine.loop();
+    expect(sceneRig.key.intensity).toBeCloseTo(0.8 * 0.5);
+    expect(sceneRig.ambient.intensity).toBeCloseTo(0.8 * 0.5);
+  });
+});
+
+describe('resetAllDecks', () => {
+  it('returns every deck to its baseline shader and disposes staged content', async () => {
+    const engine = makeEngine();
+    const { Group } = await import('three');
+    const texture = { dispose: vi.fn() };
+
+    engine.stageShader(0, 'void main() { gl_FragColor = vec4(0.5); }');
+    engine.stageSprite(1, texture, 1, 'sprite-1');
+    await engine.stageModel(2, new Group(), 'model-1');
+    await engine.stageLandscape(3, new Group(), 'model-2');
+    engine.compositeSpin[0].spin = 4;
+
+    engine.resetAllDecks();
+
+    engine.decks.forEach((deck, i) => {
+      expect(deck.mode).toBe('shader');
+      expect(deck.body).toBe(DEFAULT_DECK_BODIES[i]);
+      expect(deck.model).toBeNull();
+      expect(deck.sprite).toBeNull();
+      expect(deck.landscape).toBeNull();
+    });
+    expect(texture.dispose).toHaveBeenCalled();
+    expect(engine.compositeSpin[0].spin).toBe(0);
+    expect(engine.getChannelSource(2)).toEqual({ type: 'shader', code: DEFAULT_DECK_BODIES[2] });
   });
 });
 

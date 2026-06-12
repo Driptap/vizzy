@@ -63,7 +63,7 @@ export function useEngineRig({
 // while its fader position is preserved for unmute.
 export function useEngineSync(
   engineRef: EngineRef,
-  { opacities, muted, scales, sizes, positions, fx, aut, crossfade, cueScene }: PerformanceState,
+  { opacities, muted, scales, sizes, positions, lights, layers, fx, aut, crossfade, cueScene }: PerformanceState,
 ): void {
   useEffect(() => {
     const engine = engineRef.current;
@@ -72,13 +72,15 @@ export function useEngineSync(
     scales.forEach((value, i) => engine.setScale(i, value));
     sizes.forEach((size, i) => engine.setSize(i, size.x, size.y));
     positions.forEach((pos, i) => engine.setPosition(i, pos.x, pos.y));
+    lights.forEach((l, i) => engine.setLighting(i, l.brightness, (l.angle * Math.PI) / 180));
+    layers.forEach((layer, i) => engine.setLayer(i, layer));
     fx.forEach((f, i) => {
       engine.setChannelFx(i, (f.tilt * Math.PI) / 180, f.contrast, (f.hue * Math.PI) / 180, f.sat);
       engine.setAudioRouting(i, f.band, f.amt);
     });
     aut.forEach((a, i) => engine.setAutomation(i, a));
     engine.setCrossfade(crossfade);
-  }, [engineRef, opacities, muted, scales, sizes, positions, fx, aut, crossfade]);
+  }, [engineRef, opacities, muted, scales, sizes, positions, lights, layers, fx, aut, crossfade]);
 
   useEffect(() => {
     engineRef.current?.setCueScene(cueScene);

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import type { DeckEntry, ModelEntry, SpriteEntry } from './types';
+import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry } from './types';
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
 import { Tutorial } from './components/Tutorial';
@@ -84,6 +84,12 @@ export default function App() {
     [perf.setPrompt, perf.cueScene],
   );
 
+  // Blank rig: baseline shaders on every deck, neutral mixer; library intact.
+  const handleResetRig = useCallback(() => {
+    engineRef.current?.resetAllDecks();
+    perf.resetPerformance();
+  }, [engineRef, perf.resetPerformance]);
+
   const sceneLetter = SCENE_LETTERS[perf.cueScene];
 
   return (
@@ -115,12 +121,14 @@ export default function App() {
         onToggleMidiLearn={midi.handleToggleMidiLearn}
         midiInputs={midi.midiInputs}
         onOpenTutorial={() => setTutorialOpen(true)}
+        onResetRig={handleResetRig}
       />
 
       <div className="flex min-h-0 flex-1">
         <LibraryPanel
           open={library.libraryOpen}
           shaders={library.library.filter(isShaderEntry)}
+          scenes={library.library.filter((e): e is SceneEntry => e.kind === 'scene')}
           decks={library.library.filter((e): e is DeckEntry => e.kind === 'deck')}
           models={library.library.filter((e): e is ModelEntry => e.kind === 'model')}
           sprites={library.library.filter((e): e is SpriteEntry => e.kind === 'sprite')}
@@ -132,6 +140,7 @@ export default function App() {
           onAssignLandscape={library.handleAssignLandscape}
           onAddSprites={library.handleAddSprites}
           onAssignSprite={library.handleAssignSprite}
+          onAssignScene={library.handleAssignScene}
           onDelete={library.handleDeleteEntry}
           onRename={library.handleRenameShader}
           onAddToChannel={library.handleAddToChannel}
@@ -190,6 +199,14 @@ export default function App() {
                   pos={perf.positions[slot]}
                   onPosChange={(ch: number, axis: 'x' | 'y', v: number) =>
                     perf.applyPos(slotIndex(perf.cueScene, ch), axis, v)
+                  }
+                  light={perf.lights[slot]}
+                  onLightChange={(ch, key, v) =>
+                    perf.applyLight(slotIndex(perf.cueScene, ch), key, v)
+                  }
+                  layer={perf.layers[slot]}
+                  onLayerChange={(ch: number, l: number) =>
+                    perf.applyLayer(slotIndex(perf.cueScene, ch), l)
                   }
                   sourceType={perf.sourceTypes[slot]}
                   fx={perf.fx[slot]}

@@ -16,12 +16,13 @@ import {
   animateModelDeck,
   animateShaderComposite,
   animateSpriteDeck,
+  applyLightRig,
   resetShaderComposite,
 } from './automation';
 import { makeCompositeScene, sceneUniformSet, masterUniformSet } from './compositor';
 import { flipAndPremultiply } from './preview';
-import type { AudioBand, AutomationMap, ChannelPos, ChannelSource, StageResult } from '../types';
-import type { BlitView, Deck, DeckAudioUniforms, SlotBaseParams, SlotUniforms } from './types';
+import type { AudioBand, AutomationMap, ChannelLight, ChannelPos, ChannelSource, SceneSpec, StageResult } from '../types';
+import type { BlitView, Deck, DeckAudioUniforms, LightRig, SlotBaseParams, SlotUniforms } from './types';
 import type { AudioEngine } from './AudioEngine';
 
 export { CHANNELS, SCENES };
@@ -71,6 +72,8 @@ export class RenderEngine {
   automation: AutomationMap[];
   /** in-scene content offsets (landscape camera pan/height, model/sprite shift) */
   positions: ChannelPos[];
+  /** per-channel light rig controls (angle already in radians) */
+  lighting: ChannelLight[];
   /** knob-set composite params; AUT modulates the uniforms around these */
   baseParams: SlotBaseParams[];
   /** per-deck accumulated composite spin (shader-deck ROT automation) */
@@ -117,7 +120,10 @@ export class RenderEngine {
     // and the result is blitted to the on-screen 2D view canvases (a WebGL
     // context can only present to a single canvas).
     this.renderer = new THREE.WebGLRenderer({ antialias: false });
-    this.renderer.setClearColor(0x000000, 1);
+    // alpha-0 clear: deck targets carry real per-pixel COVERAGE (a model's
+    // silhouette, a sprite's transparency) for the layer compositor; the
+    // additive same-layer path multiplies by alpha exactly as before.
+    this.renderer.setClearColor(0x000000, 0);
 
     this.views = { master: { canvas: null, ctx: null } };
     Object.entries(viewCanvases).forEach(([key, canvas]) => {
@@ -201,6 +207,7 @@ export class RenderEngine {
     this.spriteGeometry = new THREE.PlaneGeometry(1, 1);
     this.automation = DEFAULT_DECK_BODIES.map(() => makeDefaultAut());
     this.positions = DEFAULT_DECK_BODIES.map(() => ({ x: 0, y: 0 }));
+    this.lighting = DEFAULT_DECK_BODIES.map(() => ({ brightness: 1, angle: 0 }));
 
     this.modelCamera = new THREE.PerspectiveCamera(
       45,
@@ -222,6 +229,8 @@ export class RenderEngine {
       fx: { value: new THREE.Vector4(0, 1, 0, 1) },
       // x = AUT sine-warp, y = AUT shear (engine-driven, zero at rest)
       warp: { value: new THREE.Vector2(0, 0) },
+      // compositing layer: 1 = top .. 4 = base; everything starts on the base
+      layer: { value: 4 },
     }));
     this.baseParams = this.decks.map((_, i) => ({
       mix: INITIAL_OPACITIES[i],
@@ -335,6 +344,25 @@ export class RenderEngine {
     this.positions[deckIndex] = { x, y };
   }
 
+  /** @param angle key-light orbit in radians */
+  setLighting(deckIndex: number, brightness: number, angle: number): void {
+    this.lighting[deckIndex] = { brightness, angle };
+  }
+
+  /** @param layer compositing layer 1 (top) .. 4 (base) */
+  setLayer(deckIndex: number, layer: number): void {
+    this.slotUniforms[deckIndex].layer.value = layer;
+  }
+
+  // Return every deck to its baseline shader, disposing staged models,
+  // sprites and landscapes. Library content on disk is untouched.
+  resetAllDecks(): void {
+    this.decks.forEach((deck, i) => {
+      this.stageShader(i, DEFAULT_DECK_BODIES[i]);
+      this.compositeSpin[i].spin = 0;
+    });
+  }
+
   // Attach/detach the master-out canvas (lives in a pop-out window; same
   // renderer process, so the per-frame blit works exactly like the A/B views).
   setMasterCanvas(canvas: HTMLCanvasElement | null): void {
@@ -446,6 +474,37 @@ export class RenderEngine {
     deck.sprite = null;
   }
 
+  // The vaporwave light rig: warm ambient, magenta key, cyan rim. Base
+  // intensities and the key orbit are recorded so channel light controls can
+  // restyle it live.
+  private buildLightRig(
+    scene: THREE.Scene,
+    keyPos: THREE.Vector3,
+    intensity: { ambient: number; key: number; rim: number },
+    keyColor: THREE.ColorRepresentation,
+    rimPos: THREE.Vector3,
+  ): LightRig {
+    const ambient = new THREE.AmbientLight(0xffffff, intensity.ambient);
+    scene.add(ambient);
+    const key = new THREE.DirectionalLight(keyColor, intensity.key);
+    key.position.copy(keyPos);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x22d3ee, intensity.rim);
+    rim.position.copy(rimPos);
+    scene.add(rim);
+    return {
+      ambient,
+      key,
+      rim,
+      ambientBase: intensity.ambient,
+      keyBase: intensity.key,
+      rimBase: intensity.rim,
+      keyRadius: Math.hypot(keyPos.x, keyPos.z) || 1,
+      keyBaseAngle: Math.atan2(keyPos.x, keyPos.z),
+      keyHeight: keyPos.y,
+    };
+  }
+
   // Put a loaded 3D object on a deck: auto-centered and normalized to the
   // camera, lit, slowly rotating, scale-pulsing with the deck's routed audio.
   // Async on purpose: shaders are pre-compiled in parallel and buffers
@@ -467,13 +526,13 @@ export class RenderEngine {
 
     const scene = new THREE.Scene();
     scene.add(group);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(2, 3, 4);
-    scene.add(key);
-    const rim = new THREE.DirectionalLight(0x22d3ee, 1.2);
-    rim.position.set(-3, -1, -2);
-    scene.add(rim);
+    const rig = this.buildLightRig(
+      scene,
+      new THREE.Vector3(2, 3, 4),
+      { ambient: 0.5, key: 1.6, rim: 1.2 },
+      0xffffff, // models keep their neutral key so imported materials read true
+      new THREE.Vector3(-3, -1, -2),
+    );
 
     // 1) parallel (non-blocking) shader compilation for all the file's materials
     try {
@@ -493,19 +552,35 @@ export class RenderEngine {
     this.disposeModel(deck);
     this.disposeSprite(deck);
     this.disposeLandscape(deck);
-    deck.model = { scene, group, modelId, baseScale, spin: 0 };
+    deck.model = { scene, group, modelId, baseScale, spin: 0, rig };
     deck.mode = 'model';
     return { ok: true };
   }
 
-  // Put a mesh on a deck as fly-over terrain: laid out as a tile scrolling
-  // toward a low camera, duplicated and MIRRORED in z so the seam where the
-  // two copies meet always lines up (vaporwave landscape mode). Same
-  // precompile-then-swap discipline as stageModel.
-  async stageLandscape(
+  // Shared endless-flight staging: the object becomes a tile scrolling past
+  // the camera, duplicated and MIRRORED in z so the seam where the two copies
+  // meet always lines up. Same precompile-then-swap discipline as stageModel.
+  private async stageTiledFlight(
     deckIndex: number,
     object3D: THREE.Object3D,
-    modelId: string,
+    opts: {
+      mode: 'landscape' | 'scene';
+      fly: 'over' | 'through';
+      modelId?: string;
+      spec?: SceneSpec;
+      /** scale widest horizontal axis to LANDSCAPE_WIDTH (imported meshes) */
+      normalize: boolean;
+      /** rest the bounding box on y=0 (fly-over) vs keep centred (tunnels) */
+      ground: boolean;
+      /** light rig config, or null for genuinely unlit content */
+      lights: {
+        intensity: { ambient: number; key: number; rim: number };
+        keyColor: THREE.ColorRepresentation;
+        keyPos: THREE.Vector3;
+        rimPos: THREE.Vector3;
+      } | null;
+      fogColor: THREE.ColorRepresentation;
+    },
   ): Promise<StageResult> {
     const deck = this.decks[deckIndex];
 
@@ -513,11 +588,9 @@ export class RenderEngine {
     const sizeVec = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
 
-    // normalize: widest horizontal axis -> LANDSCAPE_WIDTH, ground at y=0,
-    // centered on the camera's track
     const widest = Math.max(sizeVec.x, sizeVec.z) || 1;
-    const scale = LANDSCAPE_WIDTH / widest;
-    object3D.position.set(-center.x, -box.min.y, -center.z);
+    const scale = opts.normalize ? LANDSCAPE_WIDTH / widest : 1;
+    object3D.position.set(-center.x, opts.ground ? -box.min.y : -center.y, -center.z);
 
     // both copies render the same geometry — clone shares geometry/materials
     const span = Math.max(sizeVec.z * scale, 1);
@@ -540,17 +613,19 @@ export class RenderEngine {
     });
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x000000, span * 0.3, span * 1.9);
+    scene.fog = new THREE.Fog(opts.fogColor, span * 0.3, span * 1.9);
     tiles.forEach((tile) => scene.add(tile));
-    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-    const key = new THREE.DirectionalLight(0xe879f9, 1.4); // magenta sun
-    key.position.set(0, 2, -6);
-    scene.add(key);
-    const rim = new THREE.DirectionalLight(0x22d3ee, 0.9); // cyan rim
-    rim.position.set(3, 4, 2);
-    scene.add(rim);
+    const rig = opts.lights
+      ? this.buildLightRig(
+          scene,
+          opts.lights.keyPos,
+          opts.lights.intensity,
+          opts.lights.keyColor,
+          opts.lights.rimPos,
+        )
+      : undefined;
 
-    const camHeight = height * 0.55 + 0.5;
+    const camHeight = opts.fly === 'through' ? 0 : height * 0.55 + 0.5;
     const camera = new THREE.PerspectiveCamera(
       64,
       this.deckWidth / this.deckHeight,
@@ -558,7 +633,7 @@ export class RenderEngine {
       span * 2.5,
     );
     camera.position.set(0, camHeight, span * 0.45);
-    camera.lookAt(0, camHeight * 0.45, -6);
+    camera.lookAt(0, opts.fly === 'through' ? camHeight : camHeight * 0.45, -6);
 
     try {
       if (this.renderer.compileAsync) {
@@ -574,9 +649,64 @@ export class RenderEngine {
     this.disposeModel(deck);
     this.disposeSprite(deck);
     this.disposeLandscape(deck);
-    deck.landscape = { scene, tiles, camera, modelId, span, camHeight, scroll: 0 };
-    deck.mode = 'landscape';
+    deck.landscape = {
+      scene,
+      tiles,
+      camera,
+      rig,
+      fly: opts.fly,
+      modelId: opts.modelId,
+      spec: opts.spec,
+      span,
+      camHeight,
+      scroll: 0,
+    };
+    deck.mode = opts.mode;
     return { ok: true };
+  }
+
+  // Put a mesh on a deck as fly-over terrain (vaporwave landscape mode).
+  stageLandscape(
+    deckIndex: number,
+    object3D: THREE.Object3D,
+    modelId: string,
+  ): Promise<StageResult> {
+    return this.stageTiledFlight(deckIndex, object3D, {
+      mode: 'landscape',
+      fly: 'over',
+      modelId,
+      normalize: true,
+      ground: true,
+      lights: {
+        intensity: { ambient: 0.45, key: 1.4, rim: 0.9 },
+        keyColor: 0xe879f9, // magenta horizon sun
+        keyPos: new THREE.Vector3(0, 2, -6),
+        rimPos: new THREE.Vector3(3, 4, 2),
+      },
+      fogColor: 0x000000,
+    });
+  }
+
+  // Put a procedurally generated scene on a deck: terrain flies over, tunnels
+  // fly through the axis. Vertex colours carry the palette, so the rig is
+  // ambient-heavy with a neutral key — bright by default, but the LIGHT
+  // channel controls can dim it or swing the sun around. Fog takes the
+  // spec's third palette colour.
+  stageScene(deckIndex: number, object3D: THREE.Object3D, spec: SceneSpec): Promise<StageResult> {
+    return this.stageTiledFlight(deckIndex, object3D, {
+      mode: 'scene',
+      fly: spec.kind === 'tunnel' ? 'through' : 'over',
+      spec,
+      normalize: false,
+      ground: spec.kind !== 'tunnel',
+      lights: {
+        intensity: { ambient: 0.8, key: 0.8, rim: 0.45 },
+        keyColor: 0xffffff, // neutral key keeps the palette true
+        keyPos: new THREE.Vector3(0, 2, -6),
+        rimPos: new THREE.Vector3(3, 4, 2),
+      },
+      fogColor: spec.palette[2],
+    });
   }
 
   disposeLandscape(deck: Deck): void {
@@ -622,8 +752,11 @@ export class RenderEngine {
     if (deck.mode === 'sprite' && deck.sprite) {
       return { type: 'sprite', spriteId: deck.sprite.spriteId };
     }
-    if (deck.mode === 'landscape' && deck.landscape) {
+    if (deck.mode === 'landscape' && deck.landscape?.modelId) {
       return { type: 'landscape', modelId: deck.landscape.modelId };
+    }
+    if (deck.mode === 'scene' && deck.landscape?.spec) {
+      return { type: 'scene', spec: deck.landscape.spec };
     }
     return { type: 'shader', code: deck.body };
   }
@@ -795,14 +928,16 @@ export class RenderEngine {
       if (deck.mode === 'model' && deck.model) {
         const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateModelDeck(deck.model, this.automation[i], level, t, dt, this.positions[i]);
+        applyLightRig(deck.model.rig, this.lighting[i]);
         this.renderer.render(deck.model.scene, this.modelCamera);
       } else if (deck.mode === 'sprite' && deck.sprite) {
         const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateSpriteDeck(deck.sprite, this.automation[i], level, t, dt, this.positions[i]);
         this.renderer.render(deck.sprite.scene, this.camera);
-      } else if (deck.mode === 'landscape' && deck.landscape) {
+      } else if ((deck.mode === 'landscape' || deck.mode === 'scene') && deck.landscape) {
         const level = this.deckAudioUniforms[i].u_audio_level.value;
         animateLandscapeDeck(deck.landscape, this.automation[i], level, t, dt, this.positions[i]);
+        if (deck.landscape.rig) applyLightRig(deck.landscape.rig, this.lighting[i]);
         this.renderer.render(deck.landscape.scene, deck.landscape.camera);
       } else {
         this.renderer.render(deck.scene, this.camera);

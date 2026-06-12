@@ -4,6 +4,7 @@ import {
   animateModelDeck,
   animateShaderComposite,
   animateSpriteDeck,
+  applyLightRig,
   resetShaderComposite,
 } from './automation';
 import { makeDefaultAut } from '../lib/channels';
@@ -211,5 +212,49 @@ describe('resetShaderComposite', () => {
     expect(uniforms.mix.value).toBe(0.8);
     expect(uniforms.fx.value.x).toBeCloseTo(0.2);
     expect(uniforms.warp.value).toMatchObject({ x: 0, y: 0 });
+  });
+});
+
+describe('applyLightRig', () => {
+  const makeRig = () => ({
+    ambient: { intensity: 0 },
+    key: { intensity: 0, position: { set(x, y, z) { Object.assign(this, { x, y, z }); }, x: 0, y: 0, z: 0 } },
+    rim: { intensity: 0 },
+    ambientBase: 0.5,
+    keyBase: 1.6,
+    rimBase: 1.2,
+    keyRadius: Math.hypot(2, 4),
+    keyBaseAngle: Math.atan2(2, 4),
+    keyHeight: 3,
+  });
+
+  it('brightness 1 / angle 0 reproduces the built-in rig exactly', () => {
+    const rig = makeRig();
+    applyLightRig(rig, { brightness: 1, angle: 0 });
+    expect(rig.ambient.intensity).toBeCloseTo(0.5);
+    expect(rig.key.intensity).toBeCloseTo(1.6);
+    expect(rig.rim.intensity).toBeCloseTo(1.2);
+    expect(rig.key.position.x).toBeCloseTo(2);
+    expect(rig.key.position.y).toBeCloseTo(3);
+    expect(rig.key.position.z).toBeCloseTo(4);
+  });
+
+  it('brightness scales every light; 0 is a blackout', () => {
+    const rig = makeRig();
+    applyLightRig(rig, { brightness: 2, angle: 0 });
+    expect(rig.key.intensity).toBeCloseTo(3.2);
+    expect(rig.rim.intensity).toBeCloseTo(2.4);
+    applyLightRig(rig, { brightness: 0, angle: 0 });
+    expect(rig.ambient.intensity).toBe(0);
+    expect(rig.key.intensity).toBe(0);
+  });
+
+  it('angle orbits the key light at constant radius and height', () => {
+    const rig = makeRig();
+    applyLightRig(rig, { brightness: 1, angle: Math.PI }); // opposite side
+    expect(rig.key.position.x).toBeCloseTo(-2);
+    expect(rig.key.position.z).toBeCloseTo(-4);
+    expect(rig.key.position.y).toBeCloseTo(3); // elevation untouched
+    expect(Math.hypot(rig.key.position.x, rig.key.position.z)).toBeCloseTo(rig.keyRadius);
   });
 });

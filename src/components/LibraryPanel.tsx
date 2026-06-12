@@ -3,11 +3,12 @@ import type {
   DeckEntry,
   LibraryEntry,
   ModelEntry,
+  SceneEntry,
   ShaderEntry,
   SpriteEntry,
 } from '../types';
 
-type TabId = 'shaders' | 'decks' | 'models' | 'sprites';
+type TabId = 'shaders' | 'scenes' | 'decks' | 'models' | 'sprites';
 
 interface ContextMenu {
   x: number;
@@ -22,6 +23,7 @@ const MENU_HEIGHT = 330;
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'shaders', label: 'SHDR' },
+  { id: 'scenes', label: 'SCN' },
   { id: 'decks', label: 'DECKS' },
   { id: 'models', label: '3D' },
   { id: 'sprites', label: 'IMG' },
@@ -39,6 +41,7 @@ const FILE_TABS: Partial<Record<TabId, { extensions: string[]; buttonLabel: stri
 interface LibraryPanelProps {
   open: boolean;
   shaders: ShaderEntry[];
+  scenes: SceneEntry[];
   decks: DeckEntry[];
   models: ModelEntry[];
   sprites: SpriteEntry[];
@@ -50,6 +53,7 @@ interface LibraryPanelProps {
   onAssignLandscape: (entry: ModelEntry, channel: number) => void;
   onAddSprites: (files: File[]) => void;
   onAssignSprite: (entry: SpriteEntry, channel: number) => void;
+  onAssignScene: (entry: SceneEntry, channel: number) => void;
   onDelete: (entry: LibraryEntry) => void;
   onRename: (entry: LibraryEntry, name: string) => void;
   onAddToChannel: (entry: ShaderEntry, channel: number) => void;
@@ -58,6 +62,7 @@ interface LibraryPanelProps {
 export function LibraryPanel({
   open,
   shaders,
+  scenes,
   decks,
   models,
   sprites,
@@ -69,6 +74,7 @@ export function LibraryPanel({
   onAssignLandscape,
   onAddSprites,
   onAssignSprite,
+  onAssignScene,
   onDelete,
   onRename,
   onAddToChannel,
@@ -129,7 +135,15 @@ export function LibraryPanel({
   };
 
   const items: LibraryEntry[] =
-    tab === 'shaders' ? shaders : tab === 'decks' ? decks : tab === 'models' ? models : sprites;
+    tab === 'shaders'
+      ? shaders
+      : tab === 'scenes'
+        ? scenes
+        : tab === 'decks'
+          ? decks
+          : tab === 'models'
+            ? models
+            : sprites;
   const fileTab = FILE_TABS[tab];
 
   return (
@@ -139,13 +153,13 @@ export function LibraryPanel({
       }`}
     >
       <div className="flex h-full w-60 flex-col border-r border-neutral-800 bg-neutral-900">
-        <div className="flex gap-1 border-b border-neutral-800 px-2 py-2">
+        <div className="flex gap-1 overflow-x-auto border-b border-neutral-800 px-2 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TABS.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`rounded px-2.5 py-1 text-[10px] font-bold tracking-widest transition-colors ${
+              className={`shrink-0 whitespace-nowrap rounded px-2.5 py-1 text-[10px] font-bold tracking-widest transition-colors ${
                 tab === t.id
                   ? 'bg-neutral-700 text-cyan-300'
                   : 'text-neutral-500 hover:text-neutral-300'
@@ -216,6 +230,8 @@ export function LibraryPanel({
             <p className="px-2 py-4 text-center text-[10px] leading-relaxed text-neutral-600">
               {tab === 'shaders' &&
                 'Nothing saved yet — hit SAVE on a deck channel to capture its shader here.'}
+              {tab === 'scenes' &&
+                'No fly-through scenes yet — switch a deck to SCENE mode, generate one, then hit SAVE.'}
               {tab === 'decks' &&
                 'No deck presets yet — build a scene, then hit SAVE DECK to capture all 4 channels.'}
               {tab === 'models' &&
@@ -246,6 +262,11 @@ export function LibraryPanel({
                   no preview
                 </div>
               )}
+              {tab === 'scenes' && (
+                <span className="absolute right-2.5 top-2.5 rounded bg-black/60 px-1 py-0.5 text-[8px] font-black tracking-widest text-fuchsia-300">
+                  {(entry as SceneEntry).spec?.kind === 'tunnel' ? 'TUBE' : 'TERRA'}
+                </span>
+              )}
               {tab === 'decks' && (
                 <span className="absolute right-2.5 top-2.5 rounded bg-black/60 px-1 py-0.5 text-[8px] font-black tracking-widest text-amber-300">
                   4CH
@@ -272,7 +293,9 @@ export function LibraryPanel({
                     if (e.key === 'Escape') setRenamingId(null);
                   }}
                   placeholder={
-                    tab === 'decks'
+                    tab === 'scenes'
+                      ? 'Scene name'
+                      : tab === 'decks'
                       ? 'Deck name'
                       : tab === 'models'
                         ? 'Model name'
@@ -312,13 +335,14 @@ export function LibraryPanel({
                 type="button"
                 onClick={() => {
                   if (menu.kind === 'shaders') onAddToChannel(menu.entry as ShaderEntry, channel);
+                  else if (menu.kind === 'scenes') onAssignScene(menu.entry as SceneEntry, channel);
                   else if (menu.kind === 'models') onAssignModel(menu.entry as ModelEntry, channel);
                   else onAssignSprite(menu.entry as SpriteEntry, channel);
                   setMenu(null);
                 }}
                 className="block w-full px-3 py-1.5 text-left text-xs text-neutral-300 hover:bg-neutral-800 hover:text-cyan-300"
               >
-                {menu.kind === 'shaders' ? 'Add to channel ' : 'Assign to '}
+                {menu.kind === 'shaders' || menu.kind === 'scenes' ? 'Add to channel ' : 'Assign to '}
                 {sceneLetter}
                 {channel + 1}
               </button>

@@ -63,7 +63,7 @@ export function useSessionPersistence({
 
   // Autosave: snapshot the whole performance state on any change, debounced
   // to disk; the latest snapshot is also flushed synchronously on app close.
-  const { prompts, opacities, muted, scales, sizes, positions, fx, aut, crossfade, cueScene, sourceTypes, decks } = state;
+  const { prompts, opacities, muted, scales, sizes, positions, lights, layers, fx, aut, crossfade, cueScene, sourceTypes, decks } = state;
   useEffect(() => {
     if (!sessionReadyRef.current) return undefined;
     const engine = engineRef.current;
@@ -79,6 +79,8 @@ export function useSessionPersistence({
         scale: scales[i],
         size: sizes[i],
         pos: positions[i],
+        light: lights[i],
+        layer: layers[i],
         fx: fx[i],
         aut: aut[i],
       })),
@@ -89,7 +91,7 @@ export function useSessionPersistence({
       saveSession(snapshot).catch((err) => console.warn('[Vizzy] Session save failed:', err));
     }, 800);
     return () => clearTimeout(sessionTimerRef.current);
-  }, [engineRef, prompts, opacities, muted, scales, sizes, positions, fx, aut, crossfade, cueScene, sourceTypes, decks]);
+  }, [engineRef, prompts, opacities, muted, scales, sizes, positions, lights, layers, fx, aut, crossfade, cueScene, sourceTypes, decks]);
 
   useEffect(() => {
     const flush = () => {

@@ -14,11 +14,20 @@ vi.mock('./shaderLibrary', () => ({
 import { stageSource, resolveSourceRef } from './sourceStaging';
 import { loadModelObject } from './modelLoader';
 
+const sceneSpec = {
+  kind: 'tunnel',
+  surface: 'sin(a * 4) + fract(z * 0.5)',
+  amplitude: 2,
+  palette: ['#1a0533', '#05ffa1', '#000000'],
+};
+const sceneEntry = { id: 'scene-1', kind: 'scene', spec: sceneSpec, createdAt: 4 };
+
 const makeEngine = () => ({
   stageShader: vi.fn(() => ({ ok: true })),
   stageSprite: vi.fn(() => ({ ok: true })),
   stageModel: vi.fn(async () => ({ ok: true })),
   stageLandscape: vi.fn(async () => ({ ok: true })),
+  stageScene: vi.fn(async () => ({ ok: true })),
 });
 
 const modelEntry = { id: 'model-1', kind: 'model', file: 'm.stl', createdAt: 1 };
@@ -50,6 +59,27 @@ describe('stageSource', () => {
     expect(engine.stageModel).not.toHaveBeenCalled();
   });
 
+  it('builds and stages procedural scenes from their spec', async () => {
+    const engine = makeEngine();
+    const result = await stageSource(engine, 2, { type: 'scene', spec: sceneSpec });
+    expect(result).toEqual({ ok: true });
+    const [slot, object, spec] = engine.stageScene.mock.calls[0];
+    expect(slot).toBe(2);
+    expect(object.children).toHaveLength(1); // a real built Group
+    expect(spec).toBe(sceneSpec);
+  });
+
+  it('an uncompilable scene spec fails cleanly instead of throwing', async () => {
+    const engine = makeEngine();
+    const result = await stageSource(engine, 0, {
+      type: 'scene',
+      spec: { ...sceneSpec, surface: 'nonsense(z)' },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Unknown function/);
+    expect(engine.stageScene).not.toHaveBeenCalled();
+  });
+
   it('loads and stages sprites with their aspect', async () => {
     const engine = makeEngine();
     await stageSource(engine, 0, { type: 'sprite', entry: spriteEntry });
@@ -73,7 +103,7 @@ describe('stageSource', () => {
 
 describe('resolveSourceRef', () => {
   const byId = new Map(
-    [modelEntry, spriteEntry, shaderEntry].map((e) => [e.id, e]),
+    [modelEntry, spriteEntry, shaderEntry, sceneEntry].map((e) => [e.id, e]),
   );
 
   it('resolves deck-preset refs by id kind', () => {
@@ -93,6 +123,20 @@ describe('resolveSourceRef', () => {
       type: 'landscape',
       entry: modelEntry,
     });
+  });
+
+  it('resolves scene refs: deck presets by sceneId, sessions by inline spec', () => {
+    expect(resolveSourceRef({ sceneId: 'scene-1' }, byId).source).toEqual({
+      type: 'scene',
+      spec: sceneSpec,
+    });
+    expect(resolveSourceRef({ type: 'scene', spec: sceneSpec }, byId).source).toEqual({
+      type: 'scene',
+      spec: sceneSpec,
+    });
+    expect(resolveSourceRef({ sceneId: 'gone' }, byId).error).toBe(
+      'Saved scene is missing from the library',
+    );
   });
 
   it('resolves session sources, keeping landscape distinct from model', () => {

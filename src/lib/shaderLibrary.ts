@@ -7,6 +7,8 @@ import type {
   DeckEntry,
   LibraryEntry,
   ModelEntry,
+  SceneEntry,
+  SceneSpec,
   ShaderEntry,
   SpriteEntry,
 } from '../types';
@@ -122,6 +124,31 @@ export async function saveShader({
     id: makeId('shader'),
     name,
     code,
+    screenshot,
+    createdAt: Date.now(),
+  };
+  await writeEntry(entry);
+  return entry;
+}
+
+/** A procedural fly-through scene: the generating spec, stored as JSON. */
+export async function saveScene({
+  name = '',
+  spec,
+  prompt = '',
+  screenshot = null,
+}: {
+  name?: string;
+  spec: SceneSpec;
+  prompt?: string;
+  screenshot?: string | null;
+}): Promise<SceneEntry> {
+  const entry: SceneEntry = {
+    id: makeId('scene'),
+    kind: 'scene',
+    name,
+    spec,
+    prompt,
     screenshot,
     createdAt: Date.now(),
   };

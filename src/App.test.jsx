@@ -15,6 +15,9 @@ vi.mock('./engine/RenderEngine', () => {
       this.setScale = vi.fn();
       this.setSize = vi.fn();
       this.setPosition = vi.fn();
+      this.setLighting = vi.fn();
+      this.setLayer = vi.fn();
+      this.resetAllDecks = vi.fn();
       this.setChannelFx = vi.fn();
       this.setAudioRouting = vi.fn();
       this.setAutomation = vi.fn();
@@ -25,6 +28,7 @@ vi.mock('./engine/RenderEngine', () => {
       this.stageSprite = vi.fn(() => ({ ok: true }));
       this.stageModel = vi.fn(async () => ({ ok: true }));
       this.stageLandscape = vi.fn(async () => ({ ok: true }));
+      this.stageScene = vi.fn(async () => ({ ok: true }));
       this.getShaderBody = vi.fn(() => 'void main() {}');
       this.getChannelSource = vi.fn(() => ({ type: 'shader', code: null }));
       this.getPreviewDataURL = vi.fn(() => 'data:image/jpeg;preview');
@@ -135,7 +139,7 @@ import App from './App';
 import { __engines } from './engine/RenderEngine';
 import { __midis } from './engine/MidiEngine';
 import { __queues, resolveServer, listInstalledModels } from './llm/ollama';
-import { hasSeededMarker, writeSeededMarker, listShaders } from './lib/shaderLibrary';
+import { hasSeededMarker, writeSeededMarker, listShaders, deleteEntry } from './lib/shaderLibrary';
 import { seedExampleLibrary } from './lib/exampleSeed';
 import { loadSession } from './lib/session';
 
@@ -227,7 +231,7 @@ describe('shader generation', () => {
     fireEvent.change(deckPrompt(1), { target: { value: 'liquid chrome' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[1]);
 
-    expect(queue().enqueue).toHaveBeenCalledWith(1, 'liquid chrome', expect.any(Function));
+    expect(queue().enqueue).toHaveBeenCalledWith(1, 'liquid chrome', expect.any(Function), null, null);
 
     const onResponse = queue().enqueue.mock.calls[0][2];
     const raw = '```glsl\nvoid main() { gl_FragColor = vec4(1.0); }\n```';
@@ -260,6 +264,7 @@ describe('shader generation', () => {
       expect.objectContaining({
         error: 'No GLSL main() block found in the model response',
       }),
+      null,
     );
   });
 
@@ -283,6 +288,7 @@ describe('shader generation', () => {
         code: 'void main() { gl_FragColor = vec4(x); }',
         error: "ERROR: 'x' undeclared",
       },
+      null,
     );
   });
 
@@ -295,7 +301,7 @@ describe('shader generation', () => {
 
     fireEvent.change(deckPrompt(0), { target: { value: 'for scene b' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
-    expect(queue().enqueue).toHaveBeenCalledWith(4, 'for scene b', expect.any(Function));
+    expect(queue().enqueue).toHaveBeenCalledWith(4, 'for scene b', expect.any(Function), null, null);
   });
 });
 
@@ -363,6 +369,65 @@ describe('channel position', () => {
     engine().setPosition.mockClear();
     fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
     await waitFor(() => expect(engine().setPosition).toHaveBeenCalledWith(0, 0, 0));
+  });
+});
+
+describe('layering', () => {
+  it('the layer switch routes the cued slot to the engine and resets to base', async () => {
+    await renderApp();
+    expect(screen.getAllByRole('button', { name: 'Layer 1' })).toHaveLength(4);
+
+    engine().setLayer.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Layer 1' })[1]); // deck A2 to top
+    await waitFor(() => expect(engine().setLayer).toHaveBeenCalledWith(1, 1));
+    expect(screen.getAllByRole('button', { name: 'Layer 1' })[1]).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    engine().setLayer.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[1]);
+    await waitFor(() => expect(engine().setLayer).toHaveBeenCalledWith(1, 4));
+  });
+
+  it('cueing scene B routes layer changes to slots 4-7', async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'CUE B' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Layer 2' })[2]); // deck B3
+    await waitFor(() => expect(engine().setLayer).toHaveBeenCalledWith(6, 2));
+  });
+});
+
+describe('channel lighting', () => {
+  it('LIGHT knobs reach the engine in radians and reset to defaults', async () => {
+    const model = { id: 'model-5', kind: 'model', file: 'm.glb', createdAt: 1 };
+    listShaders.mockResolvedValueOnce([model]);
+    loadSession.mockResolvedValueOnce({
+      version: 1,
+      crossfade: 0,
+      cueScene: 0,
+      slots: [{ source: { type: 'model', modelId: 'model-5' } }],
+    });
+    await renderApp();
+    await waitFor(() => expect(engine().stageModel).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'LIGHT' })[0]);
+    engine().setLighting.mockClear();
+    fireEvent.doubleClick(screen.getByRole('slider', { name: 'DIR' })); // reset-to-0 still syncs
+    await waitFor(() => expect(engine().setLighting).toHaveBeenCalledWith(0, 1, 0));
+
+    fireEvent.wheel(screen.getByRole('slider', { name: 'DIR' }), { deltaY: -1 });
+    await waitFor(() =>
+      expect(engine().setLighting).toHaveBeenCalledWith(
+        0,
+        1,
+        ((360 / 50) * Math.PI) / 180, // one wheel notch of the ±180° range, in radians
+      ),
+    );
+
+    engine().setLighting.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'RESET' })[0]);
+    await waitFor(() => expect(engine().setLighting).toHaveBeenCalledWith(0, 1, 0));
   });
 });
 
@@ -459,6 +524,68 @@ describe('session restore', () => {
   });
 });
 
+describe('procedural scene generation', () => {
+  const SCENE_JSON =
+    '{"kind":"tunnel","surface":"sin(a*6)+fract(z*0.5)","amplitude":2,"palette":["#1a0533","#05ffa1","#000000"]}';
+
+  it('SCENE mode sends the scene system prompt and stages the parsed spec', async () => {
+    await renderApp();
+    fireEvent.change(deckPrompt(0), { target: { value: 'neon wormhole' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'SCENE' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
+
+    const [slot, prompt, handler, repair, system] = queue().enqueue.mock.calls[0];
+    expect(slot).toBe(0);
+    expect(prompt).toBe('neon wormhole');
+    expect(repair).toBeNull();
+    expect(system).toContain('ONLY a single JSON object');
+
+    await act(async () => handler(SCENE_JSON));
+    expect(engine().stageScene).toHaveBeenCalledWith(
+      0,
+      expect.anything(), // the built THREE.Group
+      expect.objectContaining({ kind: 'tunnel', amplitude: 2 }),
+    );
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+  });
+
+  it('an unparseable scene response fails the deck with the specific error', async () => {
+    await renderApp();
+    fireEvent.change(deckPrompt(0), { target: { value: 'something' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'SCENE' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
+
+    const handler = queue().enqueue.mock.calls[0][2];
+    await act(async () => handler('{"kind":"terrain","surface":"alert(1)"}'));
+    expect(engine().stageScene).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Bad surface expression/)).toBeInTheDocument();
+  });
+
+  it('a session scene source restores through stageScene', async () => {
+    loadSession.mockResolvedValueOnce({
+      version: 1,
+      crossfade: 0,
+      cueScene: 0,
+      slots: [
+        {
+          source: {
+            type: 'scene',
+            spec: { kind: 'terrain', surface: 'sin(x)', amplitude: 2, palette: ['#111111', '#222222', '#333333'] },
+          },
+        },
+      ],
+    });
+    await renderApp();
+    await waitFor(() =>
+      expect(engine().stageScene).toHaveBeenCalledWith(
+        0,
+        expect.anything(),
+        expect.objectContaining({ kind: 'terrain', surface: 'sin(x)' }),
+      ),
+    );
+  });
+});
+
 describe('landscape restore', () => {
   it('a saved landscape slot restores through stageLandscape, not stageModel', async () => {
     const terrain = { id: 'model-9', kind: 'model', file: 't.stl', createdAt: 1 };
@@ -475,6 +602,43 @@ describe('landscape restore', () => {
       expect(engine().stageLandscape).toHaveBeenCalledWith(0, { kind: 'object3d' }, 'model-9'),
     );
     expect(engine().stageModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('reset rig', () => {
+  it('confirmed reset blanks the decks and mixer but never touches the library', async () => {
+    await renderApp();
+    // dirty the rig: a prompt, a staged shader, a hot fader, a moved crossfader
+    fireEvent.change(deckPrompt(0), { target: { value: 'about to vanish' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Generate' })[0]);
+    act(() => queue().enqueue.mock.calls[0][2]('void main() { gl_FragColor = vec4(1.0); }'));
+    fireEvent.change(screen.getByRole('slider', { name: 'B3 opacity' }), {
+      target: { value: '0.9' },
+    });
+    fireEvent.change(screen.getByRole('slider', { name: 'Scene crossfader' }), {
+      target: { value: '0.7' },
+    });
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sure? Click again' }));
+
+    expect(engine().resetAllDecks).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(deckPrompt(0)).toHaveValue(''));
+    expect(screen.getByRole('slider', { name: 'B3 opacity' })).toHaveValue('0');
+    expect(screen.getByRole('slider', { name: 'A1 opacity' })).toHaveValue('1'); // boot state
+    expect(screen.getByRole('slider', { name: 'Scene crossfader' })).toHaveValue('0');
+    expect(screen.queryByText('Active')).not.toBeInTheDocument(); // statuses back to idle
+    // library operations were never invoked
+    expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it('a single unconfirmed click does nothing', async () => {
+    await renderApp();
+    fireEvent.change(deckPrompt(0), { target: { value: 'still here' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
+    expect(engine().resetAllDecks).not.toHaveBeenCalled();
+    expect(deckPrompt(0)).toHaveValue('still here');
   });
 });
 

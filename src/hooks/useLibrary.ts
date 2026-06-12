@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   listShaders,
   saveShader,
+  saveScene,
   saveDeck,
   saveModel,
   saveSprite,
@@ -26,6 +27,7 @@ import type {
   DeckEntry,
   LibraryEntry,
   ModelEntry,
+  SceneEntry,
   SessionSnapshot,
   ShaderEntry,
   SpriteEntry,
@@ -55,6 +57,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     scales,
     sizes,
     positions,
+    lights,
+    layers,
     fx,
     aut,
     setDeckState,
@@ -95,19 +99,31 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
       const engine = engineRef.current;
       if (!engine) return;
       const slot = slotIndex(cueScene, channel);
-      // model/sprite channels have no shader to save; they're already library entries
-      if (engine.getChannelSource(slot).type !== 'shader') return;
+      // model/sprite channels are already library entries; shaders and
+      // generated scenes get captured here
+      const source = engine.getChannelSource(slot);
       try {
-        const entry = await saveShader({
-          code: engine.getShaderBody(slot),
-          screenshot: engine.getPreviewDataURL(channel),
-        });
+        let entry: LibraryEntry;
+        if (source.type === 'shader') {
+          entry = await saveShader({
+            code: engine.getShaderBody(slot),
+            screenshot: engine.getPreviewDataURL(channel),
+          });
+        } else if (source.type === 'scene') {
+          entry = await saveScene({
+            spec: source.spec,
+            prompt: prompts[slot],
+            screenshot: engine.getPreviewDataURL(channel),
+          });
+        } else {
+          return;
+        }
         setLibrary((prev) => [entry, ...prev]);
       } catch (err) {
-        console.error('[Vizzy] Saving shader failed:', err);
+        console.error('[Vizzy] Saving channel failed:', err);
       }
     },
-    [engineRef, cueScene],
+    [engineRef, cueScene, prompts],
   );
 
   const handleAddModels = useCallback(async (files: File[]) => {
@@ -169,6 +185,12 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     [stageOntoSlot, cueScene],
   );
 
+  const handleAssignScene = useCallback(
+    (entry: SceneEntry, channel: number) =>
+      stageOntoSlot(slotIndex(cueScene, channel), { type: 'scene', spec: entry.spec }),
+    [stageOntoSlot, cueScene],
+  );
+
   // Same model entry, staged as fly-over terrain instead of a centered object.
   const handleAssignLandscape = useCallback(
     (entry: ModelEntry, channel: number) =>
@@ -185,6 +207,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     const scene = cueScene;
     try {
       const newShaders: ShaderEntry[] = [];
+      const newScenes: SceneEntry[] = [];
       const channels: DeckChannelConfig[] = [];
       for (let ch = 0; ch < CHANNELS; ch += 1) {
         const slot = slotIndex(scene, ch);
@@ -195,6 +218,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           scale: scales[slot],
           size: { ...sizes[slot] },
           pos: { ...positions[slot] },
+          light: { ...lights[slot] },
+          layer: layers[slot],
           fx: { ...fx[slot] },
           aut: structuredClone(aut[slot]),
         };
@@ -205,6 +230,22 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           channels.push({ spriteId: source.spriteId, ...config });
         } else if (source.type === 'landscape') {
           channels.push({ landscapeId: source.modelId, ...config });
+        } else if (source.type === 'scene') {
+          const specJson = JSON.stringify(source.spec);
+          let sceneEntry =
+            library.find(
+              (e): e is SceneEntry => e.kind === 'scene' && JSON.stringify(e.spec) === specJson,
+            ) || newScenes.find((e) => JSON.stringify(e.spec) === specJson);
+          if (!sceneEntry) {
+            // eslint-disable-next-line no-await-in-loop
+            sceneEntry = await saveScene({
+              spec: source.spec,
+              prompt: prompts[slot],
+              screenshot: engine.getPreviewDataURL(ch),
+            });
+            newScenes.push(sceneEntry);
+          }
+          channels.push({ sceneId: sceneEntry.id, ...config });
         } else {
           let shaderEntry =
             library.find((e) => isShaderEntry(e) && e.code === source.code) ||
@@ -221,11 +262,11 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
         }
       }
       const deckEntry = await saveDeck({ channels, screenshot: engine.getSceneDataURL(scene) });
-      setLibrary((prev) => [deckEntry, ...newShaders, ...prev]);
+      setLibrary((prev) => [deckEntry, ...newScenes, ...newShaders, ...prev]);
     } catch (err) {
       console.error('[Vizzy] Saving deck preset failed:', err);
     }
-  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, fx, aut]);
+  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, lights, layers, fx, aut]);
 
   // Load a deck preset into scene A or B: stage all 4 channels and restore
   // each channel's config; the engine sync effect pushes it down. Takes the
@@ -310,6 +351,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleAssignSprite,
     handleAssignModel,
     handleAssignLandscape,
+    handleAssignScene,
     handleAddToChannel,
     handleSaveDeckScene,
     handleAssignDeck,

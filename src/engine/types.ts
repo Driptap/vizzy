@@ -1,7 +1,25 @@
 // Internal engine structures shared between RenderEngine and its helpers.
 import type * as THREE from 'three';
+import type { SceneSpec } from '../types';
 
-export type DeckMode = 'shader' | 'model' | 'sprite' | 'landscape';
+export type DeckMode = 'shader' | 'model' | 'sprite' | 'landscape' | 'scene';
+
+/**
+ * The vaporwave light rig on lit decks, kept adjustable: base intensities and
+ * the key light's orbit are recorded so channel light controls can scale and
+ * steer them without losing the original look.
+ */
+export interface LightRig {
+  ambient: THREE.AmbientLight;
+  key: THREE.DirectionalLight;
+  rim: THREE.DirectionalLight;
+  ambientBase: number;
+  keyBase: number;
+  rimBase: number;
+  keyRadius: number;
+  keyBaseAngle: number;
+  keyHeight: number;
+}
 
 /** A staged 3D model: normalized, lit, slowly rotating. */
 export interface ModelDeckContent {
@@ -10,6 +28,7 @@ export interface ModelDeckContent {
   modelId: string;
   baseScale: number;
   spin: number;
+  rig: LightRig;
 }
 
 /** A staged image sprite on a centered, aspect-preserving quad. */
@@ -25,17 +44,26 @@ export interface SpriteDeckContent {
 }
 
 /**
- * A mesh staged as fly-over terrain: two mirrored copies of the model
- * leapfrog toward a low camera for a seamless infinite scroll.
+ * Content staged for endless flight: two mirrored copies of a mesh leapfrog
+ * past the camera for a seamless infinite scroll. Used by landscape decks
+ * (imported mesh, fly over) and procedural scene decks (generated terrain
+ * fly-over or tunnel fly-through).
  */
 export interface LandscapeDeckContent {
   scene: THREE.Scene;
   tiles: [THREE.Group, THREE.Group];
   camera: THREE.PerspectiveCamera;
-  modelId: string;
+  /** 'over' skims a low camera above the ground; 'through' flies the axis */
+  fly: 'over' | 'through';
+  /** library model id (landscape decks) */
+  modelId?: string;
+  /** generating spec (procedural scene decks) */
+  spec?: SceneSpec;
+  /** present on lit content (mesh landscapes); procedural scenes are unlit */
+  rig?: LightRig;
   /** tile depth in world units — the scroll wraps on this period */
   span: number;
-  /** camera height above the terrain ground plane */
+  /** camera height above the terrain ground plane (0 for fly-through) */
   camHeight: number;
   scroll: number;
 }
@@ -61,6 +89,8 @@ export interface SlotUniforms {
   fx: THREE.IUniform<THREE.Vector4>;
   /** x = AUT sine-warp amount, y = AUT shear — engine-driven, 0 when idle */
   warp: THREE.IUniform<THREE.Vector2>;
+  /** compositing layer 1 (top) .. 4 (base); same layer blends additively */
+  layer: THREE.IUniform<number>;
 }
 
 /** The knob-set composite params AUT modulates around (never overwritten). */

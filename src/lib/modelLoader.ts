@@ -16,8 +16,13 @@ export const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
  * file:// URLs, so URL-based loading is out. Notes per format:
  * - .glb is the reliable self-contained choice
  * - .gltf with external .bin/textures will fail to resolve those resources
- * - .obj/.stl get MeshNormalMaterial (no .mtl support; always visible)
+ * - .obj/.stl have no material info (no .mtl support) — they get a neutral
+ *   LIT standard material so the deck light rig (and the BRT/DIR channel
+ *   controls) actually shape them
  */
+const bareMeshMaterial = () =>
+  new THREE.MeshStandardMaterial({ color: 0xd8d8e8, roughness: 0.45, metalness: 0.25 });
+
 export async function loadModelObject(filePath: string): Promise<THREE.Object3D> {
   const ext = path.extname(filePath).toLowerCase();
   const buf = await fs.readFile(filePath);
@@ -35,7 +40,7 @@ export async function loadModelObject(filePath: string): Promise<THREE.Object3D>
       const object = new OBJLoader().parse(new TextDecoder().decode(arrayBuffer));
       object.traverse((node) => {
         if ((node as THREE.Mesh).isMesh) {
-          (node as THREE.Mesh).material = new THREE.MeshNormalMaterial();
+          (node as THREE.Mesh).material = bareMeshMaterial();
         }
       });
       return object;
@@ -43,7 +48,7 @@ export async function loadModelObject(filePath: string): Promise<THREE.Object3D>
     case '.stl': {
       const geometry = new STLLoader().parse(arrayBuffer);
       geometry.computeVertexNormals();
-      return new THREE.Mesh(geometry, new THREE.MeshNormalMaterial());
+      return new THREE.Mesh(geometry, bareMeshMaterial());
     }
     case '.fbx':
       return new FBXLoader().parse(arrayBuffer, '');

@@ -191,6 +191,20 @@ describe('GenerationQueue', () => {
     expect(body.prompt).toContain('## Style guidance — Escape-time fractals');
   });
 
+  it('a system override replaces the GLSL prompt and skips recipes', async () => {
+    fetch.mockResolvedValue(jsonResponse({ response: 'ok' }));
+    const { queue } = makeQueue();
+    // 'fractal' would normally trigger a style recipe — the override wins
+    queue.enqueue(0, 'an infinite fractal tunnel', vi.fn(), null, 'CUSTOM SCENE CONTRACT');
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.prompt).toContain('CUSTOM SCENE CONTRACT');
+    expect(body.prompt).not.toContain(SYSTEM_PROMPT.slice(0, 60));
+    expect(body.prompt).not.toContain('## Style guidance');
+    expect(body.prompt).toContain('User request: an infinite fractal tunnel');
+  });
+
   it('includes the failing code and error in a repair request', async () => {
     fetch.mockResolvedValue(jsonResponse({ response: 'ok' }));
     const { queue } = makeQueue();

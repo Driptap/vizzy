@@ -5,6 +5,7 @@ import type {
   AutEffectKey,
   AutomationMap,
   ChannelFx,
+  ChannelLight,
   ChannelPos,
   ChannelSize,
   DeckStatus,
@@ -24,6 +25,9 @@ const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = 
 const BUSY_STATUSES: DeckStatus[] = ['queued', 'generating', 'compiling'];
 
 const TABS = ['XFRM', 'AUDIO', 'COLOR', 'AUT'];
+
+// deck types with a real light rig (only sprites are unlit)
+const LIT_SOURCES: SourceType[] = ['model', 'landscape', 'scene'];
 
 const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'scl', label: 'SCL', title: 'Scaling' },
@@ -54,6 +58,11 @@ interface DeckModuleProps {
   /** in-scene offset — landscape camera pan/height, model/sprite shift */
   pos: ChannelPos;
   onPosChange: (channel: number, axis: 'x' | 'y', value: number) => void;
+  light: ChannelLight;
+  onLightChange: (channel: number, key: keyof ChannelLight, value: number) => void;
+  /** compositing layer 1 (top) .. 4 (base) */
+  layer: number;
+  onLayerChange: (channel: number, layer: number) => void;
   sourceType: SourceType;
   fx: ChannelFx;
   onFxChange: <K extends keyof ChannelFx>(channel: number, key: K, value: ChannelFx[K]) => void;
@@ -64,8 +73,8 @@ interface DeckModuleProps {
     field: 'amt' | 'audio',
     value: number | boolean,
   ) => void;
-  onGenerate: (channel: number, prompt: string) => void;
-  onRegenerate: (channel: number, prompt: string) => void;
+  onGenerate: (channel: number, prompt: string, mode: 'shader' | 'scene') => void;
+  onRegenerate: (channel: number, prompt: string, mode: 'shader' | 'scene') => void;
   onSave: (channel: number) => void | Promise<void>;
   onReset: (channel: number) => void;
   previewRef: (el: HTMLCanvasElement | null) => void;
@@ -84,6 +93,10 @@ export function DeckModule({
   onSizeChange,
   pos,
   onPosChange,
+  light,
+  onLightChange,
+  layer,
+  onLayerChange,
   sourceType,
   fx,
   onFxChange,
@@ -98,6 +111,8 @@ export function DeckModule({
   const [saved, setSaved] = useState(false);
   const [tab, setTab] = useState('XFRM');
   const [aspectLocked, setAspectLocked] = useState(false);
+  // what Generate produces: a GLSL shader, or a procedural fly-through scene
+  const [genMode, setGenMode] = useState<'shader' | 'scene'>('shader');
 
   const clampSize = (v: number) => Math.min(1, Math.max(0.05, v));
   // when locked, moving one axis scales the other by the same factor
@@ -116,9 +131,13 @@ export function DeckModule({
   const badge = STATUS_STYLES[status] || STATUS_STYLES.idle;
   const busy = BUSY_STATUSES.includes(status);
 
+  // LIGHT only exists for lit deck types; fall back if the source changes
+  const tabs = LIT_SOURCES.includes(sourceType) ? [...TABS, 'LIGHT'] : TABS;
+  const effectiveTab = tabs.includes(tab) ? tab : 'XFRM';
+
 
   const generate = () => {
-    if (prompt.trim() && !busy) onGenerate(index, prompt.trim());
+    if (prompt.trim() && !busy) onGenerate(index, prompt.trim(), genMode);
   };
 
   const save = async () => {
@@ -241,14 +260,14 @@ export function DeckModule({
         </div>
       </div>
 
-      <div className="flex gap-1">
-        {TABS.map((t) => (
+      <div className="flex flex-wrap items-center gap-1">
+        {tabs.map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
             className={`rounded px-2 py-0.5 text-[9px] font-bold tracking-wider transition-colors ${
-              tab === t
+              effectiveTab === t
                 ? 'bg-neutral-700 text-cyan-300'
                 : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
             }`}
@@ -256,10 +275,32 @@ export function DeckModule({
             {t}
           </button>
         ))}
+        <div
+          className="ml-auto flex items-center gap-0.5"
+          title="Compositing layer: 1 renders on top, 4 is the base. Decks on the same layer blend additively; content on a higher layer covers what's beneath it (image/3D transparency cuts through)."
+        >
+          <span className="text-[8px] font-bold tracking-wider text-neutral-600">LYR</span>
+          {[1, 2, 3, 4].map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => onLayerChange(index, l)}
+              aria-pressed={layer === l}
+              aria-label={`Layer ${l}`}
+              className={`w-4 rounded-sm text-[9px] font-bold leading-4 transition-colors ${
+                layer === l
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-neutral-950 text-neutral-600 hover:text-neutral-300'
+              }`}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex h-20 items-center justify-evenly">
-        {tab === 'XFRM' && (
+        {effectiveTab === 'XFRM' && (
           <>
             <Knob
               label="SCALE"
@@ -307,7 +348,7 @@ export function DeckModule({
           </>
         )}
 
-        {tab === 'AUDIO' && (
+        {effectiveTab === 'AUDIO' && (
           <>
             <div className="flex flex-col items-center gap-1">
               <div className="flex overflow-hidden rounded border border-neutral-700">
@@ -341,7 +382,7 @@ export function DeckModule({
           </>
         )}
 
-        {tab === 'COLOR' && (
+        {effectiveTab === 'COLOR' && (
           <>
             <Knob
               label="CON"
@@ -374,7 +415,7 @@ export function DeckModule({
           </>
         )}
 
-        {tab === 'AUT' &&
+        {effectiveTab === 'AUT' &&
           AUT_EFFECTS.map(({ key, label, title }) => (
             <div key={key} className="flex flex-col items-center gap-1">
               <Knob
@@ -405,6 +446,29 @@ export function DeckModule({
               </button>
             </div>
           ))}
+        {effectiveTab === 'LIGHT' && (
+          <>
+            <Knob
+              label="BRT"
+              value={light.brightness}
+              min={0}
+              max={2}
+              defaultValue={1}
+              format={(v) => `${v.toFixed(2)}x`}
+              onChange={(v) => onLightChange(index, 'brightness', v)}
+            />
+            <Knob
+              label="DIR"
+              value={light.angle}
+              min={-180}
+              max={180}
+              defaultValue={0}
+              bipolar
+              format={(v) => `${Math.round(v)}°`}
+              onChange={(v) => onLightChange(index, 'angle', v)}
+            />
+          </>
+        )}
       </div>
 
       <textarea
@@ -422,7 +486,7 @@ export function DeckModule({
         <div className="flex gap-1.5">
           <button
             type="button"
-            onClick={() => prompt.trim() && onRegenerate(index, prompt.trim())}
+            onClick={() => prompt.trim() && onRegenerate(index, prompt.trim(), genMode)}
             disabled={!prompt.trim()}
             title="Send the prompt plus the failing code and compiler error back to the model to fix"
             className="flex-1 rounded bg-amber-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
@@ -440,14 +504,36 @@ export function DeckModule({
           </button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={generate}
-          disabled={busy || !prompt.trim()}
-          className="rounded bg-cyan-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
-        >
-          {busy ? badge.label : 'Generate'}
-        </button>
+        <div className="flex gap-1.5">
+          <div
+            className="flex overflow-hidden rounded border border-neutral-700"
+            title="GLSL: the model writes a fragment shader. SCENE: the model designs a 3D fly-through (terrain or tunnel)"
+          >
+            {(['shader', 'scene'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setGenMode(mode)}
+                aria-pressed={genMode === mode}
+                className={`px-1.5 text-[8px] font-bold tracking-wider transition-colors ${
+                  genMode === mode
+                    ? 'bg-cyan-600 text-white'
+                    : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                {mode === 'shader' ? 'GLSL' : 'SCENE'}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={busy || !prompt.trim()}
+            className="flex-1 rounded bg-cyan-600 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+          >
+            {busy ? badge.label : 'Generate'}
+          </button>
+        </div>
       )}
 
       {error && (

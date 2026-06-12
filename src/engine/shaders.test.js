@@ -43,12 +43,14 @@ describe('DEFAULT_DECK_BODIES', () => {
 });
 
 describe('composite shaders', () => {
-  it('scene composite mixes 4 decks', () => {
+  it('scene composite mixes 4 decks through the layer stack', () => {
     for (let i = 1; i <= 4; i += 1) {
       expect(SCENE_FRAGMENT).toContain(`u_deck${i}`);
       expect(SCENE_FRAGMENT).toContain(`u_mix${i}`);
+      expect(SCENE_FRAGMENT).toContain(`u_layer${i}`);
     }
     expect(SCENE_FRAGMENT).not.toContain('u_deck5');
+    expect(SCENE_FRAGMENT).toContain('layerStack(');
   });
 
   it('master composite crossfades 8 decks', () => {
@@ -56,14 +58,18 @@ describe('composite shaders', () => {
       expect(COMPOSITE_FRAGMENT).toContain(`u_deck${i}`);
       expect(COMPOSITE_FRAGMENT).toContain(`u_fx${i}`);
       expect(COMPOSITE_FRAGMENT).toContain(`u_warp${i}`);
+      expect(COMPOSITE_FRAGMENT).toContain(`u_layer${i}`);
     }
     expect(COMPOSITE_FRAGMENT).toContain('u_xfade');
+    // layering happens per scene BEFORE the crossfade
+    expect(COMPOSITE_FRAGMENT).toMatch(/layerStack\(d1.*u_layer4\)/s);
+    expect(COMPOSITE_FRAGMENT).toMatch(/layerStack\(d5.*u_layer8\)/s);
   });
 
   it('all composite sources are brace-balanced and share the deck sampler', () => {
     [SCENE_FRAGMENT, COMPOSITE_FRAGMENT, PREVIEW_FRAGMENT].forEach((src) => {
       expect(balanced(src)).toBe(true);
-      expect(src).toContain('vec3 deckColor(');
+      expect(src).toContain('vec4 deckColor(');
     });
     expect(balanced(SPRITE_FRAGMENT)).toBe(true);
   });

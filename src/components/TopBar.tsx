@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MODEL_CATALOG } from '../llm/models';
 
 const CUSTOM = '__custom__';
@@ -22,6 +22,7 @@ interface TopBarProps {
   onToggleMidiLearn: () => void;
   midiInputs: number;
   onOpenTutorial: () => void;
+  onResetRig: () => void;
 }
 
 export function TopBar({
@@ -43,10 +44,26 @@ export function TopBar({
   onToggleMidiLearn,
   midiInputs,
   onOpenTutorial,
+  onResetRig,
 }: TopBarProps) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
   const showCustom = customMode || !inCatalog;
+
+  // two-click confirm: a stray click mid-set must never wipe the rig
+  const [resetArmed, setResetArmed] = useState(false);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(resetTimerRef.current), []);
+  const handleResetClick = () => {
+    if (resetArmed) {
+      clearTimeout(resetTimerRef.current);
+      setResetArmed(false);
+      onResetRig();
+      return;
+    }
+    setResetArmed(true);
+    resetTimerRef.current = setTimeout(() => setResetArmed(false), 3000);
+  };
   return (
     <div className="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
       <h1 className="text-sm font-black tracking-widest text-cyan-400">
@@ -152,6 +169,18 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleResetClick}
+          title="Clear all decks and the mixer back to defaults — the library is untouched"
+          className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+            resetArmed
+              ? 'bg-red-600 text-white hover:bg-red-500'
+              : 'bg-neutral-700 text-neutral-200 hover:bg-red-900/70 hover:text-red-200'
+          }`}
+        >
+          {resetArmed ? 'Sure? Click again' : 'Reset Rig'}
+        </button>
         <span className="text-[10px] text-neutral-500">
           {midiInputs > 0 ? `${midiInputs} MIDI in` : 'No MIDI'}
         </span>

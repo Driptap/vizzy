@@ -4,6 +4,8 @@ import {
   SLOTS,
   INITIAL_OPACITIES,
   DEFAULT_FX,
+  DEFAULT_LIGHT,
+  DEFAULT_LAYER,
   makeDefaultAut,
   sceneOfSlot,
 } from '../lib/channels';
@@ -11,6 +13,7 @@ import type {
   AutEffectKey,
   AutomationMap,
   ChannelFx,
+  ChannelLight,
   ChannelPos,
   ChannelSize,
   DeckChannelConfig,
@@ -38,6 +41,10 @@ export function usePerformanceState() {
   const [positions, setPositions] = useState<ChannelPos[]>(() =>
     Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 })),
   );
+  const [lights, setLights] = useState<ChannelLight[]>(() =>
+    Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })),
+  );
+  const [layers, setLayers] = useState<number[]>(() => Array(SLOTS).fill(DEFAULT_LAYER));
   const [fx, setFx] = useState<ChannelFx[]>(() =>
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })),
   );
@@ -81,6 +88,17 @@ export function usePerformanceState() {
     setPositions((prev) => prev.map((p, i) => (i === slot ? { ...p, [axis]: value } : p)));
   }, []);
 
+  const applyLight = useCallback(
+    (slot: number, key: keyof ChannelLight, value: number) => {
+      setLights((prev) => prev.map((l, i) => (i === slot ? { ...l, [key]: value } : l)));
+    },
+    [],
+  );
+
+  const applyLayer = useCallback((slot: number, layer: number) => {
+    setLayers((prev) => prev.map((v, i) => (i === slot ? layer : v)));
+  }, []);
+
   const applyCrossfade = useCallback((value: number) => {
     setCrossfade(value);
   }, []);
@@ -113,8 +131,28 @@ export function usePerformanceState() {
     setScales((prev) => prev.map((v, i) => (i === slot ? 1 : v)));
     setSizes((prev) => prev.map((v, i) => (i === slot ? { x: 1, y: 1 } : v)));
     setPositions((prev) => prev.map((v, i) => (i === slot ? { x: 0, y: 0 } : v)));
+    setLights((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_LIGHT } : v)));
+    setLayers((prev) => prev.map((v, i) => (i === slot ? DEFAULT_LAYER : v)));
     setFx((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FX } : v)));
     setAut((prev) => prev.map((v, i) => (i === slot ? makeDefaultAut() : v)));
+  }, []);
+
+  // The whole rig back to boot state: every slot blank, mixer neutral.
+  const resetPerformance = useCallback(() => {
+    setDecks(Array.from({ length: SLOTS }, () => ({ status: 'idle', error: null })));
+    setPrompts(Array(SLOTS).fill(''));
+    setOpacities([...INITIAL_OPACITIES]);
+    setMuted(Array(SLOTS).fill(false));
+    setScales(Array(SLOTS).fill(1));
+    setSizes(Array.from({ length: SLOTS }, () => ({ x: 1, y: 1 })));
+    setPositions(Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 })));
+    setLights(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })));
+    setLayers(Array(SLOTS).fill(DEFAULT_LAYER));
+    setFx(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
+    setAut(Array.from({ length: SLOTS }, makeDefaultAut));
+    setSourceTypes(Array(SLOTS).fill('shader'));
+    setCrossfade(0);
+    setCueScene(0);
   }, []);
 
   // Overlay a deck preset's channel configs onto one scene's slots; fields a
@@ -131,6 +169,8 @@ export function usePerformanceState() {
     setScales((prev) => forScene(prev, (c, v) => c.scale ?? v));
     setSizes((prev) => forScene(prev, (c, v) => (c.size ? { ...c.size } : v)));
     setPositions((prev) => forScene(prev, (c, v) => (c.pos ? { ...c.pos } : v)));
+    setLights((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_LIGHT, ...(c.light ?? v) })));
+    setLayers((prev) => forScene(prev, (c, v) => c.layer ?? v));
     setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
     setAut((prev) =>
       forScene(prev, (c, v) =>
@@ -156,6 +196,8 @@ export function usePerformanceState() {
     setScales(perSlot((s) => s.scale ?? 1, () => 1));
     setSizes(perSlot((s) => ({ x: 1, y: 1, ...(s.size || {}) }), () => ({ x: 1, y: 1 })));
     setPositions(perSlot((s) => ({ x: 0, y: 0, ...(s.pos || {}) }), () => ({ x: 0, y: 0 })));
+    setLights(perSlot((s) => ({ ...DEFAULT_LIGHT, ...(s.light || {}) }), () => ({ ...DEFAULT_LIGHT })));
+    setLayers(perSlot((s) => s.layer ?? DEFAULT_LAYER, () => DEFAULT_LAYER));
     setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
     setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
     setCrossfade(session.crossfade ?? 0);
@@ -170,6 +212,8 @@ export function usePerformanceState() {
     scales,
     sizes,
     positions,
+    lights,
+    layers,
     fx,
     aut,
     sourceTypes,
@@ -183,11 +227,14 @@ export function usePerformanceState() {
     applyScale,
     applySize,
     applyPos,
+    applyLight,
+    applyLayer,
     applyCrossfade,
     applyFx,
     applyAut,
     setSourceType,
     resetChannelConfig,
+    resetPerformance,
     applyChannelConfigs,
     restoreFromSession,
   };
