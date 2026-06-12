@@ -4,7 +4,7 @@ import { loadModelObject } from './modelLoader';
 import { loadSpriteTexture } from './spriteLoader';
 import { buildSceneObject } from './sceneGenerator';
 import { getModelFilePath, getSpriteFilePath } from './shaderLibrary';
-import type { RenderEngine } from '../engine/RenderEngine';
+import type { RenderEngineLike } from '../hooks/useEngineRig';
 import type {
   ChannelSource,
   DeckChannelConfig,
@@ -19,7 +19,7 @@ import type {
 
 /** Stage a resolved source onto an engine slot. Never throws. */
 export async function stageSource(
-  engine: RenderEngine,
+  engine: RenderEngineLike,
   slot: number,
   source: StageableSource,
 ): Promise<StageResult> {
@@ -42,7 +42,7 @@ export async function stageSource(
       engine.stageSprite(slot, texture, aspect, source.entry.id);
       return { ok: true };
     }
-    const result = engine.stageShader(slot, source.code);
+    const result = await engine.stageShader(slot, source.code);
     return result?.ok ? { ok: true } : { ok: false, error: result?.error || 'Compile failed' };
   } catch (err) {
     console.error(`[Vizzy] Staging ${source.type} failed:`, err);

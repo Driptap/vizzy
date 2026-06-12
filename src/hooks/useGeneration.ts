@@ -25,7 +25,7 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
   const lastFailRef = useRef<Record<number, RepairContext>>({});
 
   const handleShaderResponse = useCallback(
-    (slot: number, raw: string) => {
+    async (slot: number, raw: string) => {
       const code = extractShaderCode(raw);
       if (!code) {
         const error = 'No GLSL main() block found in the model response';
@@ -34,7 +34,7 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
         return;
       }
       setDeckState(slot, 'compiling');
-      const result = engineRef.current!.stageShader(slot, code);
+      const result = await engineRef.current!.stageShader(slot, code);
       if (result.ok) {
         delete lastFailRef.current[slot];
         setDeckState(slot, 'active');

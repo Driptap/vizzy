@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { RenderEngine } from '../engine/RenderEngine';
+import { NativeRenderEngine } from '../engine/NativeRenderEngine';
 import { AudioEngine } from '../engine/AudioEngine';
 import { NativeAudioEngine } from '../engine/NativeAudioEngine';
 import { GenerationQueue, type DeckStatusCallback } from '../llm/ollama';
@@ -9,7 +10,10 @@ import type { PerformanceState } from './usePerformanceState';
 /** The audio surface the rig and controls share across both engines. */
 export type AudioEngineLike = AudioEngine | NativeAudioEngine;
 
-export type EngineRef = RefObject<RenderEngine | null>;
+/** Either renderer behind the same surface: Three.js (browser) or wgpu (Tauri). */
+export type RenderEngineLike = RenderEngine | NativeRenderEngine;
+
+export type EngineRef = RefObject<RenderEngineLike | null>;
 
 interface EngineRigOptions {
   sceneACanvasRef: RefObject<HTMLCanvasElement | null>;
@@ -29,7 +33,7 @@ export function useEngineRig({
   getModel,
   onDeckStatus,
 }: EngineRigOptions) {
-  const engineRef = useRef<RenderEngine | null>(null);
+  const engineRef = useRef<RenderEngineLike | null>(null);
   const audioRef = useRef<AudioEngineLike | null>(null);
   const queueRef = useRef<GenerationQueue | null>(null);
 
@@ -44,11 +48,19 @@ export function useEngineRig({
     const audio = isTauri() ? new NativeAudioEngine() : new AudioEngine();
     audioRef.current = audio;
 
-    const engine = new RenderEngine(
-      { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
-      previewRefs.current,
-      audio,
-    );
+    // On Tauri the wgpu engine in the Rust core renders; the client class
+    // keeps RenderEngine's surface and streams frames back onto the canvases.
+    const engine = isTauri()
+      ? new NativeRenderEngine(
+          { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
+          previewRefs.current,
+          audio,
+        )
+      : new RenderEngine(
+          { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
+          previewRefs.current,
+          audio,
+        );
     engineRef.current = engine;
 
     queueRef.current = new GenerationQueue({
