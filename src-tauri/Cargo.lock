@@ -2603,7 +2603,9 @@ checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.13.0",
  "block2",
+ "dispatch2",
  "objc2",
+ "objc2-core-foundation",
  "objc2-foundation",
 ]
 
@@ -4795,6 +4797,9 @@ dependencies = [
  "image",
  "jpeg-encoder",
  "midir",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
  "reqwest 0.12.28",
  "rustfft",
  "serde",

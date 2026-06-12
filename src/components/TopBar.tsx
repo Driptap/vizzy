@@ -8,6 +8,8 @@ interface TopBarProps {
   onToggleLibrary: () => void;
   masterOpen: boolean;
   onToggleMaster: () => void;
+  syphonOn: boolean;
+  onToggleSyphon: () => void;
   audioActive: boolean;
   audioDevices: MediaDeviceInfo[];
   selectedDevice: string;
@@ -32,6 +34,8 @@ export function TopBar({
   onToggleLibrary,
   masterOpen,
   onToggleMaster,
+  syphonOn,
+  onToggleSyphon,
   audioActive,
   audioDevices,
   selectedDevice,
@@ -97,6 +101,19 @@ export function TopBar({
         }`}
       >
         {masterOpen ? '● Master Out' : 'Master Out'}
+      </button>
+
+      <button
+        type="button"
+        onClick={onToggleSyphon}
+        title="Share the master output with other VJ apps (Resolume, MadMapper, OBS) over Syphon — macOS only"
+        className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+          syphonOn
+            ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
+            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
+        }`}
+      >
+        {syphonOn ? '● Syphon' : 'Syphon'}
       </button>
 
       <div className="ml-4 flex items-center gap-2">

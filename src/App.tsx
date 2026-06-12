@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry } from './types';
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
@@ -39,6 +39,20 @@ export default function App() {
 
   const audio = useAudioControls(audioRef);
   const master = useMasterWindow(engineRef);
+
+  // Syphon texture sharing lives in the render core; mirror its state here.
+  const [syphonOn, setSyphonOn] = useState(false);
+  useEffect(() => {
+    engineRef.current?.onTextureShare(setSyphonOn);
+  }, [engineRef]);
+  const handleToggleSyphon = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    void engine
+      .setTextureShare(!syphonOn)
+      .then(setSyphonOn)
+      .catch((err) => console.error('[Vizzy] Texture share failed:', err));
+  }, [engineRef, syphonOn]);
 
   const handleMidiControl = useCallback(
     (controlId: string, value: number) => {
@@ -107,6 +121,8 @@ export default function App() {
         onToggleLibrary={library.handleToggleLibrary}
         masterOpen={master.masterOpen}
         onToggleMaster={master.handleToggleMaster}
+        syphonOn={syphonOn}
+        onToggleSyphon={handleToggleSyphon}
         audioActive={audio.audioActive}
         audioDevices={audio.audioDevices}
         selectedDevice={audio.selectedDevice}
