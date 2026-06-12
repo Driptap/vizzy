@@ -501,6 +501,8 @@ struct ReadTarget {
 /// TOP-DOWN upright — fs_master renders with vs_present — so Syphon can
 /// publish it unflipped; the window pass re-flips while sampling.
 struct MasterTarget {
+    // read by the Syphon publish (macOS) and the GPU test readbacks only
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
