@@ -29,6 +29,13 @@ goals included.
 
 ## Workstream A — Shader generation reliability
 
+> **Superseded (2026-06-12).** The operator's hand-collected failure corpus
+> showed the failures are invalid GLSL from the model, not naga strictness —
+> a compiler swap (A2) would have fixed none of them. The route is now a
+> structured patch spec replacing raw GLSL generation entirely; see
+> `SHADER_GENERATION_PLAN.md`. A4's success-rate goal stands. A1's
+> instrumentation is unnecessary under the new approach and was not built.
+
 **A1. Capture the failure corpus (first, cheap).**
 Every compile failure already returns the error to the repair loop; also
 persist `{prompt, generated code, sanitized source, error}` as JSON to
