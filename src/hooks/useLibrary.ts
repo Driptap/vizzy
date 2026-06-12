@@ -12,8 +12,8 @@ import {
   hasSeededMarker,
   writeSeededMarker,
 } from '../lib/shaderLibrary';
-import { makeSpriteThumbnail, SPRITE_EXTENSIONS } from '../lib/spriteLoader';
-import { MODEL_EXTENSIONS } from '../lib/modelLoader';
+import { makeSpriteThumbnail } from '../lib/spriteLoader';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
 import { getPlatform } from '../platform';
 import { stageSource, resolveSourceRef } from '../lib/sourceStaging';
 import {

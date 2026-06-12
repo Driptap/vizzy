@@ -1,19 +1,10 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { RenderEngine } from '../engine/RenderEngine';
 import { NativeRenderEngine } from '../engine/NativeRenderEngine';
-import { AudioEngine } from '../engine/AudioEngine';
 import { NativeAudioEngine } from '../engine/NativeAudioEngine';
 import { GenerationQueue, type DeckStatusCallback } from '../llm/ollama';
-import { isTauri } from '../platform';
 import type { PerformanceState } from './usePerformanceState';
 
-/** The audio surface the rig and controls share across both engines. */
-export type AudioEngineLike = AudioEngine | NativeAudioEngine;
-
-/** Either renderer behind the same surface: Three.js (browser) or wgpu (Tauri). */
-export type RenderEngineLike = RenderEngine | NativeRenderEngine;
-
-export type EngineRef = RefObject<RenderEngineLike | null>;
+export type EngineRef = RefObject<NativeRenderEngine | null>;
 
 interface EngineRigOptions {
   sceneACanvasRef: RefObject<HTMLCanvasElement | null>;
@@ -23,9 +14,10 @@ interface EngineRigOptions {
   onDeckStatus: DeckStatusCallback;
 }
 
-// Owns the hardware-facing singletons: the GL render engine, the audio
-// analyser it samples, and the LLM generation queue. Created once on mount;
-// callbacks are routed through refs so the rig never needs re-creating.
+// Owns the hardware-facing singletons: the render-engine client, the native
+// audio engine (UI meters; the render core reads audio in-process), and the
+// LLM generation queue. Created once on mount; callbacks are routed through
+// refs so the rig never needs re-creating.
 export function useEngineRig({
   sceneACanvasRef,
   sceneBCanvasRef,
@@ -33,8 +25,8 @@ export function useEngineRig({
   getModel,
   onDeckStatus,
 }: EngineRigOptions) {
-  const engineRef = useRef<RenderEngineLike | null>(null);
-  const audioRef = useRef<AudioEngineLike | null>(null);
+  const engineRef = useRef<NativeRenderEngine | null>(null);
+  const audioRef = useRef<NativeAudioEngine | null>(null);
   const queueRef = useRef<GenerationQueue | null>(null);
 
   const getModelRef = useRef(getModel);
@@ -43,24 +35,13 @@ export function useEngineRig({
   onDeckStatusRef.current = onDeckStatus;
 
   useEffect(() => {
-    // Tauri webviews lack getUserMedia/Web Audio reliability; capture and FFT
-    // run in the Rust core there instead.
-    const audio = isTauri() ? new NativeAudioEngine() : new AudioEngine();
+    const audio = new NativeAudioEngine();
     audioRef.current = audio;
 
-    // On Tauri the wgpu engine in the Rust core renders; the client class
-    // keeps RenderEngine's surface and streams frames back onto the canvases.
-    const engine = isTauri()
-      ? new NativeRenderEngine(
-          { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
-          previewRefs.current,
-          audio,
-        )
-      : new RenderEngine(
-          { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
-          previewRefs.current,
-          audio,
-        );
+    const engine = new NativeRenderEngine(
+      { a: sceneACanvasRef.current, b: sceneBCanvasRef.current },
+      previewRefs.current,
+    );
     engineRef.current = engine;
 
     queueRef.current = new GenerationQueue({
@@ -78,7 +59,7 @@ export function useEngineRig({
   return { engineRef, audioRef, queueRef };
 }
 
-// Single sync point for the composite uniforms: a muted channel outputs 0
+// Single sync point for the engine state: a muted channel outputs 0
 // while its fader position is preserved for unmute.
 export function useEngineSync(
   engineRef: EngineRef,

@@ -1,8 +1,8 @@
 // Synthesizes fly-through geometry from an LLM-generated SceneSpec: a
 // vertex-coloured terrain tile (fly over) or tunnel tube (fly through).
 // Both are built centred on the z axis so the engine's mirrored two-tile
-// leapfrog loops them seamlessly.
-import * as THREE from 'three';
+// leapfrog loops them seamlessly. Pure arrays — the native core uploads
+// them and computes normals.
 import { compileExpression, type ExprFn } from './expr';
 import type { SceneSpec } from '../types';
 
@@ -16,24 +16,29 @@ const TUNNEL = { radius: 3, depth: 40, segA: 48, segZ: 60 };
 export const surfaceVarsFor = (kind: SceneSpec['kind']): string[] =>
   kind === 'tunnel' ? TUNNEL_VARS : TERRAIN_VARS;
 
-const paletteColors = (spec: SceneSpec): [THREE.Color, THREE.Color] => [
-  new THREE.Color(spec.palette[0]),
-  new THREE.Color(spec.palette[1]),
+export interface SceneBuffers {
+  positions: number[];
+  colors: number[];
+  indices: number[];
+}
+
+type Rgb = [number, number, number];
+
+const hexToRgb = (hex: string): Rgb => {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255];
+};
+
+const lerpRgb = (a: Rgb, b: Rgb, v: number): Rgb => [
+  a[0] + (b[0] - a[0]) * v,
+  a[1] + (b[1] - a[1]) * v,
+  a[2] + (b[2] - a[2]) * v,
 ];
 
-const makeMesh = (geometry: THREE.BufferGeometry): THREE.Group => {
-  geometry.computeVertexNormals();
-  // Lambert keeps the palette vivid but responds to the deck light rig, so
-  // the LIGHT channel controls (brightness / key direction) shape the scene
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
-  );
-  mesh.frustumCulled = false;
-  const group = new THREE.Group();
-  group.add(mesh);
-  return group;
-};
+const paletteColors = (spec: SceneSpec): [Rgb, Rgb] => [
+  hexToRgb(spec.palette[0]),
+  hexToRgb(spec.palette[1]),
+];
 
 const gridIndices = (cols: number, rows: number): number[] => {
   const indices: number[] = [];
@@ -49,7 +54,7 @@ const gridIndices = (cols: number, rows: number): number[] => {
   return indices;
 };
 
-function buildTerrain(spec: SceneSpec, surface: ExprFn): THREE.Group {
+function buildTerrain(spec: SceneSpec, surface: ExprFn): SceneBuffers {
   const { width, depth, segX, segZ } = TERRAIN;
   const positions: number[] = [];
   const heights: number[] = [];
@@ -67,25 +72,18 @@ function buildTerrain(spec: SceneSpec, surface: ExprFn): THREE.Group {
   const maxH = Math.max(0.001, ...heights);
   const [low, high] = paletteColors(spec);
   const colors: number[] = [];
-  const scratch = new THREE.Color();
   heights.forEach((h) => {
-    scratch.lerpColors(low, high, h / maxH);
-    colors.push(scratch.r, scratch.g, scratch.b);
+    colors.push(...lerpRgb(low, high, h / maxH));
   });
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setIndex(gridIndices(segX, segZ));
-  return makeMesh(geometry);
+  return { positions, colors, indices: gridIndices(segX, segZ) };
 }
 
-function buildTunnel(spec: SceneSpec, surface: ExprFn): THREE.Group {
+function buildTunnel(spec: SceneSpec, surface: ExprFn): SceneBuffers {
   const { radius, depth, segA, segZ } = TUNNEL;
   const positions: number[] = [];
   const colors: number[] = [];
   const [wall, glow] = paletteColors(spec);
-  const scratch = new THREE.Color();
 
   for (let j = 0; j <= segZ; j += 1) {
     for (let i = 0; i <= segA; i += 1) {
@@ -95,20 +93,15 @@ function buildTunnel(spec: SceneSpec, surface: ExprFn): THREE.Group {
       const offset = Math.max(-0.8, Math.min(1, surface({ a, z })));
       const r = Math.max(0.6, radius + offset * spec.amplitude * 0.3);
       positions.push(Math.cos(a) * r, Math.sin(a) * r, z);
-      scratch.lerpColors(wall, glow, (offset + 0.8) / 1.8);
-      colors.push(scratch.r, scratch.g, scratch.b);
+      colors.push(...lerpRgb(wall, glow, (offset + 0.8) / 1.8));
     }
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setIndex(gridIndices(segA, segZ));
-  return makeMesh(geometry);
+  return { positions, colors, indices: gridIndices(segA, segZ) };
 }
 
 /** @throws when the spec's surface expression doesn't compile */
-export function buildSceneObject(spec: SceneSpec): THREE.Group {
+export function buildSceneBuffers(spec: SceneSpec): SceneBuffers {
   const surface = compileExpression(spec.surface, surfaceVarsFor(spec.kind));
   return spec.kind === 'tunnel' ? buildTunnel(spec, surface) : buildTerrain(spec, surface);
 }

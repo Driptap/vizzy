@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPlatform } from '../platform';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
 import type {
   DeckEntry,
   LibraryEntry,
@@ -30,8 +31,6 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'sprites', label: 'IMG' },
 ];
 
-const MODEL_EXTENSIONS = ['.glb', '.gltf', '.obj', '.stl', '.fbx'];
-const SPRITE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
 // tabs whose content comes from files on disk (open button + drag-drop)
 const FILE_TABS: Partial<Record<TabId, { extensions: string[]; buttonLabel: string }>> = {
@@ -197,7 +196,7 @@ export function LibraryPanel({
               {tab === 'decks' &&
                 'No deck presets yet — build a scene, then hit SAVE DECK to capture all 4 channels.'}
               {tab === 'models' &&
-                'No models yet — drop .glb / .obj / .stl / .fbx files here, or use OPEN MODEL.'}
+                'No models yet — drop .glb / .obj / .stl files here, or use OPEN MODEL.'}
               {tab === 'sprites' &&
                 'No sprites yet — drop .png / .jpg / .webp / .gif files here, or use OPEN IMAGE.'}
             </p>

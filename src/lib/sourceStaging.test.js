@@ -1,18 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./modelLoader', () => ({
-  loadModelObject: vi.fn(async () => ({ kind: 'object3d' })),
-}));
-vi.mock('./spriteLoader', () => ({
-  loadSpriteTexture: vi.fn(async () => ({ texture: { id: 'tex' }, aspect: 1.5 })),
-}));
 vi.mock('./shaderLibrary', () => ({
   getModelFilePath: vi.fn(async (entry) => `/models/${entry.file}`),
   getSpriteFilePath: vi.fn(async (entry) => `/sprites/${entry.file}`),
 }));
 
 import { stageSource, resolveSourceRef } from './sourceStaging';
-import { loadModelObject } from './modelLoader';
 
 const sceneSpec = {
   kind: 'tunnel',
@@ -22,12 +15,13 @@ const sceneSpec = {
 };
 const sceneEntry = { id: 'scene-1', kind: 'scene', spec: sceneSpec, createdAt: 4 };
 
+// the engine is the NativeRenderEngine surface stageSource drives
 const makeEngine = () => ({
-  stageShader: vi.fn(() => ({ ok: true })),
-  stageSprite: vi.fn(() => ({ ok: true })),
-  stageModel: vi.fn(async () => ({ ok: true })),
-  stageLandscape: vi.fn(async () => ({ ok: true })),
-  stageScene: vi.fn(async () => ({ ok: true })),
+  stageShader: vi.fn(async () => ({ ok: true })),
+  stageSpriteFromPath: vi.fn(async () => ({ ok: true })),
+  stageModelFromPath: vi.fn(async () => ({ ok: true })),
+  stageLandscapeFromPath: vi.fn(async () => ({ ok: true })),
+  stageSceneSpec: vi.fn(async () => ({ ok: true })),
 });
 
 const modelEntry = { id: 'model-1', kind: 'model', file: 'm.stl', createdAt: 1 };
@@ -37,65 +31,57 @@ const shaderEntry = { id: 'shader-1', code: 'void main() {}', createdAt: 3 };
 beforeEach(() => vi.clearAllMocks());
 
 describe('stageSource', () => {
-  it('stages shaders synchronously through the engine', async () => {
+  it('stages shaders through the engine', async () => {
     const engine = makeEngine();
     const result = await stageSource(engine, 2, { type: 'shader', code: 'void main() {}' });
     expect(result).toEqual({ ok: true });
     expect(engine.stageShader).toHaveBeenCalledWith(2, 'void main() {}');
   });
 
-  it('loads and stages models', async () => {
+  it('stages models by library file path', async () => {
     const engine = makeEngine();
     await stageSource(engine, 1, { type: 'model', entry: modelEntry });
-    expect(loadModelObject).toHaveBeenCalledWith('/models/m.stl');
-    expect(engine.stageModel).toHaveBeenCalledWith(1, { kind: 'object3d' }, 'model-1');
-    expect(engine.stageLandscape).not.toHaveBeenCalled();
+    expect(engine.stageModelFromPath).toHaveBeenCalledWith(1, '/models/m.stl', 'model-1');
+    expect(engine.stageLandscapeFromPath).not.toHaveBeenCalled();
   });
 
   it('stages the same model entry as a landscape when asked', async () => {
     const engine = makeEngine();
     await stageSource(engine, 3, { type: 'landscape', entry: modelEntry });
-    expect(engine.stageLandscape).toHaveBeenCalledWith(3, { kind: 'object3d' }, 'model-1');
-    expect(engine.stageModel).not.toHaveBeenCalled();
+    expect(engine.stageLandscapeFromPath).toHaveBeenCalledWith(3, '/models/m.stl', 'model-1');
+    expect(engine.stageModelFromPath).not.toHaveBeenCalled();
   });
 
-  it('builds and stages procedural scenes from their spec', async () => {
+  it('stages procedural scenes from their spec', async () => {
     const engine = makeEngine();
     const result = await stageSource(engine, 2, { type: 'scene', spec: sceneSpec });
     expect(result).toEqual({ ok: true });
-    const [slot, object, spec] = engine.stageScene.mock.calls[0];
-    expect(slot).toBe(2);
-    expect(object.children).toHaveLength(1); // a real built Group
-    expect(spec).toBe(sceneSpec);
+    expect(engine.stageSceneSpec).toHaveBeenCalledWith(2, sceneSpec);
   });
 
-  it('an uncompilable scene spec fails cleanly instead of throwing', async () => {
+  it('propagates a failed scene stage as an error result', async () => {
     const engine = makeEngine();
-    const result = await stageSource(engine, 0, {
-      type: 'scene',
-      spec: { ...sceneSpec, surface: 'nonsense(z)' },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/Unknown function/);
-    expect(engine.stageScene).not.toHaveBeenCalled();
+    engine.stageSceneSpec.mockResolvedValueOnce({ ok: false, error: 'Unknown function nonsense' });
+    const result = await stageSource(engine, 0, { type: 'scene', spec: sceneSpec });
+    expect(result).toEqual({ ok: false, error: 'Unknown function nonsense' });
   });
 
-  it('loads and stages sprites with their aspect', async () => {
+  it('stages sprites by library file path', async () => {
     const engine = makeEngine();
     await stageSource(engine, 0, { type: 'sprite', entry: spriteEntry });
-    expect(engine.stageSprite).toHaveBeenCalledWith(0, { id: 'tex' }, 1.5, 'sprite-1');
+    expect(engine.stageSpriteFromPath).toHaveBeenCalledWith(0, '/sprites/s.png', 'sprite-1');
   });
 
-  it('returns a failure instead of throwing when a loader dies', async () => {
-    loadModelObject.mockRejectedValueOnce(new Error('corrupt file'));
+  it('returns a failure instead of throwing when staging dies', async () => {
     const engine = makeEngine();
+    engine.stageLandscapeFromPath.mockRejectedValueOnce(new Error('corrupt file'));
     const result = await stageSource(engine, 0, { type: 'landscape', entry: modelEntry });
     expect(result).toEqual({ ok: false, error: 'corrupt file' });
   });
 
   it('maps a failed shader compile to an error result', async () => {
     const engine = makeEngine();
-    engine.stageShader.mockReturnValueOnce({ ok: false, error: 'bad GLSL' });
+    engine.stageShader.mockResolvedValueOnce({ ok: false, error: 'bad GLSL' });
     const result = await stageSource(engine, 0, { type: 'shader', code: 'nope' });
     expect(result).toEqual({ ok: false, error: 'bad GLSL' });
   });

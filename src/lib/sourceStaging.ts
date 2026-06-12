@@ -1,11 +1,8 @@
 // One staging path for everything that can land on a deck slot, used by
-// library assignment, deck-preset loading and session restore alike.
-import { loadModelObject } from './modelLoader';
-import { loadSpriteTexture } from './spriteLoader';
-import { buildSceneObject } from './sceneGenerator';
+// library assignment, deck-preset loading and session restore alike. The
+// native core loads asset files itself — it gets paths, not parsed objects.
 import { getModelFilePath, getSpriteFilePath } from './shaderLibrary';
-import { NativeRenderEngine } from '../engine/NativeRenderEngine';
-import type { RenderEngineLike } from '../hooks/useEngineRig';
+import type { NativeRenderEngine } from '../engine/NativeRenderEngine';
 import type {
   ChannelSource,
   DeckChannelConfig,
@@ -23,55 +20,30 @@ const failed = (result: StageResult | undefined): StageResult =>
 
 /** Stage a resolved source onto an engine slot. Never throws. */
 export async function stageSource(
-  engine: RenderEngineLike,
+  engine: NativeRenderEngine,
   slot: number,
   source: StageableSource,
 ): Promise<StageResult> {
   try {
-    // the native engine loads asset files itself — hand it paths, not
-    // THREE objects, so nothing is decoded twice
-    if (engine instanceof NativeRenderEngine) {
-      if (source.type === 'model') {
-        return failed(
-          await engine.stageModelFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
-        );
-      }
-      if (source.type === 'landscape') {
-        return failed(
-          await engine.stageLandscapeFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
-        );
-      }
-      if (source.type === 'sprite') {
-        return failed(
-          await engine.stageSpriteFromPath(slot, await getSpriteFilePath(source.entry), source.entry.id),
-        );
-      }
-      if (source.type === 'scene') {
-        return failed(await engine.stageSceneSpec(slot, source.spec));
-      }
-      return failed(await engine.stageShader(slot, source.code));
+    if (source.type === 'model') {
+      return failed(
+        await engine.stageModelFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
+      );
     }
-
-    if (source.type === 'model' || source.type === 'landscape') {
-      const object = await loadModelObject(await getModelFilePath(source.entry));
-      if (source.type === 'landscape') {
-        await engine.stageLandscape(slot, object, source.entry.id);
-      } else {
-        await engine.stageModel(slot, object, source.entry.id);
-      }
-      return { ok: true };
-    }
-    if (source.type === 'scene') {
-      await engine.stageScene(slot, buildSceneObject(source.spec), source.spec);
-      return { ok: true };
+    if (source.type === 'landscape') {
+      return failed(
+        await engine.stageLandscapeFromPath(slot, await getModelFilePath(source.entry), source.entry.id),
+      );
     }
     if (source.type === 'sprite') {
-      const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(source.entry));
-      engine.stageSprite(slot, texture, aspect, source.entry.id);
-      return { ok: true };
+      return failed(
+        await engine.stageSpriteFromPath(slot, await getSpriteFilePath(source.entry), source.entry.id),
+      );
     }
-    const result = await engine.stageShader(slot, source.code);
-    return failed(result);
+    if (source.type === 'scene') {
+      return failed(await engine.stageSceneSpec(slot, source.spec));
+    }
+    return failed(await engine.stageShader(slot, source.code));
   } catch (err) {
     console.error(`[Vizzy] Staging ${source.type} failed:`, err);
     const fallback = source.type === 'sprite' ? 'Image load failed' : 'Content load failed';

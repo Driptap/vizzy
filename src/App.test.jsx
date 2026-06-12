@@ -5,12 +5,11 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 // with the hardware/IO boundaries (GL renderer, audio, MIDI, Ollama, disk)
 // mocked at the module seam.
 
-vi.mock('./engine/RenderEngine', () => {
+vi.mock('./engine/NativeRenderEngine', () => {
   const engines = [];
-  class RenderEngine {
-    constructor(viewCanvases, previewCanvases, audioEngine) {
+  class NativeRenderEngine {
+    constructor(viewCanvases, previewCanvases) {
       engines.push(this);
-      this.audioEngine = audioEngine;
       this.setOpacity = vi.fn();
       this.setScale = vi.fn();
       this.setSize = vi.fn();
@@ -26,11 +25,14 @@ vi.mock('./engine/RenderEngine', () => {
       this.setCrossfade = vi.fn();
       this.setCueScene = vi.fn();
       this.setMasterCanvas = vi.fn();
-      this.stageShader = vi.fn(() => ({ ok: true }));
-      this.stageSprite = vi.fn(() => ({ ok: true }));
-      this.stageModel = vi.fn(async () => ({ ok: true }));
-      this.stageLandscape = vi.fn(async () => ({ ok: true }));
-      this.stageScene = vi.fn(async () => ({ ok: true }));
+      this.onMasterClosed = vi.fn();
+      this.openMaster = vi.fn(async () => true);
+      this.closeMaster = vi.fn(async () => false);
+      this.stageShader = vi.fn(async () => ({ ok: true }));
+      this.stageSpriteFromPath = vi.fn(async () => ({ ok: true }));
+      this.stageModelFromPath = vi.fn(async () => ({ ok: true }));
+      this.stageLandscapeFromPath = vi.fn(async () => ({ ok: true }));
+      this.stageSceneSpec = vi.fn(async () => ({ ok: true }));
       this.getShaderBody = vi.fn(() => 'void main() {}');
       this.getChannelSource = vi.fn(() => ({ type: 'shader', code: null }));
       this.getPreviewDataURL = vi.fn(() => 'data:image/jpeg;preview');
@@ -38,20 +40,23 @@ vi.mock('./engine/RenderEngine', () => {
       this.dispose = vi.fn();
     }
   }
-  return { RenderEngine, CHANNELS: 4, __engines: engines };
+  return { NativeRenderEngine, CHANNELS: 4, __engines: engines };
 });
 
-vi.mock('./engine/AudioEngine', () => ({
-  AudioEngine: class AudioEngine {
+vi.mock('./engine/NativeAudioEngine', () => {
+  const audios = [];
+  class NativeAudioEngine {
     constructor() {
+      audios.push(this);
       this.active = false;
       this.start = vi.fn(async () => {});
       this.stop = vi.fn(async () => {});
       this.listDevices = vi.fn(async () => []);
       this.update = vi.fn(() => ({ low: 0, mid: 0, high: 0, level: 0 }));
     }
-  },
-}));
+  }
+  return { NativeAudioEngine, __audios: audios };
+});
 
 vi.mock('./engine/MidiEngine', () => {
   const midis = [];
@@ -138,7 +143,8 @@ vi.mock('./components/SetupScreen', () => ({
 }));
 
 import App from './App';
-import { __engines } from './engine/RenderEngine';
+import { __engines } from './engine/NativeRenderEngine';
+import { __audios } from './engine/NativeAudioEngine';
 import { __midis } from './engine/MidiEngine';
 import { __queues, resolveServer, listInstalledModels } from './llm/ollama';
 import { hasSeededMarker, writeSeededMarker, listShaders, deleteEntry } from './lib/shaderLibrary';
@@ -361,7 +367,7 @@ describe('channel position', () => {
       slots: [{ source: { type: 'landscape', modelId: 'model-9' } }],
     });
     await renderApp();
-    await waitFor(() => expect(engine().stageLandscape).toHaveBeenCalled());
+    await waitFor(() => expect(engine().stageLandscapeFromPath).toHaveBeenCalled());
 
     engine().setPosition.mockClear();
     fireEvent.wheel(screen.getByRole('slider', { name: 'POS X' }), { deltaY: -1 });
@@ -436,7 +442,7 @@ describe('channel lighting', () => {
       slots: [{ source: { type: 'model', modelId: 'model-5' } }],
     });
     await renderApp();
-    await waitFor(() => expect(engine().stageModel).toHaveBeenCalled());
+    await waitFor(() => expect(engine().stageModelFromPath).toHaveBeenCalled());
 
     fireEvent.click(screen.getAllByRole('button', { name: 'LIGHT' })[0]);
     engine().setLighting.mockClear();
@@ -568,9 +574,8 @@ describe('procedural scene generation', () => {
     expect(system).toContain('ONLY a single JSON object');
 
     await act(async () => handler(SCENE_JSON));
-    expect(engine().stageScene).toHaveBeenCalledWith(
+    expect(engine().stageSceneSpec).toHaveBeenCalledWith(
       0,
-      expect.anything(), // the built THREE.Group
       expect.objectContaining({ kind: 'tunnel', amplitude: 2 }),
     );
     expect(await screen.findByText('Active')).toBeInTheDocument();
@@ -584,11 +589,11 @@ describe('procedural scene generation', () => {
 
     const handler = queue().enqueue.mock.calls[0][2];
     await act(async () => handler('{"kind":"terrain","surface":"alert(1)"}'));
-    expect(engine().stageScene).not.toHaveBeenCalled();
+    expect(engine().stageSceneSpec).not.toHaveBeenCalled();
     expect(await screen.findByText(/Bad surface expression/)).toBeInTheDocument();
   });
 
-  it('a session scene source restores through stageScene', async () => {
+  it('a session scene source restores through stageSceneSpec', async () => {
     loadSession.mockResolvedValueOnce({
       version: 1,
       crossfade: 0,
@@ -604,9 +609,8 @@ describe('procedural scene generation', () => {
     });
     await renderApp();
     await waitFor(() =>
-      expect(engine().stageScene).toHaveBeenCalledWith(
+      expect(engine().stageSceneSpec).toHaveBeenCalledWith(
         0,
-        expect.anything(),
         expect.objectContaining({ kind: 'terrain', surface: 'sin(x)' }),
       ),
     );
@@ -614,7 +618,7 @@ describe('procedural scene generation', () => {
 });
 
 describe('landscape restore', () => {
-  it('a saved landscape slot restores through stageLandscape, not stageModel', async () => {
+  it('a saved landscape slot restores through stageLandscapeFromPath, not stageModelFromPath', async () => {
     const terrain = { id: 'model-9', kind: 'model', file: 't.stl', createdAt: 1 };
     listShaders.mockResolvedValueOnce([terrain]);
     loadSession.mockResolvedValueOnce({
@@ -626,9 +630,9 @@ describe('landscape restore', () => {
     await renderApp();
 
     await waitFor(() =>
-      expect(engine().stageLandscape).toHaveBeenCalledWith(0, { kind: 'object3d' }, 'model-9'),
+      expect(engine().stageLandscapeFromPath).toHaveBeenCalledWith(0, '/models/file.glb', 'model-9'),
     );
-    expect(engine().stageModel).not.toHaveBeenCalled();
+    expect(engine().stageModelFromPath).not.toHaveBeenCalled();
   });
 });
 
@@ -675,6 +679,6 @@ describe('teardown', () => {
     unmount();
     expect(engine().dispose).toHaveBeenCalled();
     expect(midi().dispose).toHaveBeenCalled();
-    expect(engine().audioEngine.stop).toHaveBeenCalled();
+    expect(__audios[__audios.length - 1].stop).toHaveBeenCalled();
   });
 });

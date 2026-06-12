@@ -1,7 +1,6 @@
 import { useCallback, useRef } from 'react';
 import { extractShaderCode } from '../llm/parser';
 import { SCENE_SYSTEM_PROMPT, parseSceneSpec } from '../llm/scenes';
-import { buildSceneObject } from '../lib/sceneGenerator';
 import { slotIndex } from '../lib/channels';
 
 export type GenMode = 'shader' | 'scene';
@@ -57,8 +56,8 @@ export function useGeneration({ engineRef, queueRef, cueScene, setDeckState, set
       }
       setDeckState(slot, 'compiling');
       try {
-        const object = buildSceneObject(parsed.spec);
-        await engineRef.current!.stageScene(slot, object, parsed.spec);
+        const result = await engineRef.current!.stageSceneSpec(slot, parsed.spec);
+        if (!result.ok) throw new Error(result.error);
         delete lastFailRef.current[slot];
         setDeckState(slot, 'active');
         setSourceType(slot, 'scene');
