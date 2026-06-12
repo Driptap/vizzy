@@ -6,52 +6,16 @@
   "license": "MIT",
   "homepage": "https://driptap.github.io/vizzy/",
   "private": true,
-  "main": "electron/main.cjs",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "dev": "tauri dev",
     "dev:renderer": "vite",
-    "dev:tauri": "tauri dev",
-    "dist:tauri": "tauri build",
     "build": "vite build",
-    "start": "npm run build && electron .",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "model:pull": "ollama pull qwen2.5-coder",
-    "dist": "vite build && electron-builder"
-  },
-  "build": {
-    "appId": "com.driptap.vizzy",
-    "productName": "Vizzy",
-    "artifactName": "Vizzy-${os}.${ext}",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "category": "public.app-category.music",
-      "identity": null
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "AudioVideo"
-    }
+    "dist": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -72,15 +36,10 @@
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^5.0.0",
-    "concurrently": "^9.2.0",
-    "cross-env": "^7.0.3",
-    "electron": "^38.0.0",
-    "electron-builder": "^26.15.2",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.0",
     "typescript": "^6.0.3",
     "vite": "^7.1.0",
-    "vitest": "^4.1.8",
-    "wait-on": "^8.0.1"
+    "vitest": "^4.1.8"
   }
 }

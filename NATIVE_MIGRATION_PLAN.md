@@ -2,10 +2,11 @@
 
 > **Status (2026-06-12):** Phase 0/1 implemented — Tauri 2 shell (`src-tauri/`),
 > native audio (cpal + rustfft), native MIDI (midir), Ollama runtime manager in
-> Rust, `src/platform/` host abstraction, CI (`ci.yml`) + Tauri build matrix
-> (`tauri-build.yml`). The Electron path still works and still feeds the rolling
-> release; known Tauri gaps until Phase 2: master output window, and rendering
-> still runs via Three.js in the webview (as planned).
+> Rust, `src/platform/` host abstraction, CI (`ci.yml`) + Tauri build/release
+> (`build.yml`). The Electron path is deleted (no backward compatibility of any
+> kind — no legacy shell, data, or localStorage keys). Known gaps until Phase 2:
+> master output window, and rendering still runs via Three.js in the webview
+> (as planned).
 
 Migrate Vizzy from Electron + Three.js to a **hybrid architecture**: the React UI stays
 web-based, while rendering, audio analysis, MIDI, and OS integration move into a native

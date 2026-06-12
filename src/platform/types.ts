@@ -1,6 +1,6 @@
 // The desktop-shell boundary: everything the renderer needs from the host
 // (file IO, data dirs, the managed Ollama runtime, native file drops) behind
-// one interface so Electron and Tauri builds share the entire app on top.
+// one interface, with a browser stub so dev-server/test runs construct cleanly.
 
 export interface OllamaStatus {
   installed: boolean;
@@ -38,26 +38,23 @@ export interface PlatformFs {
 }
 
 export interface Platform {
-  kind: 'electron' | 'tauri' | 'browser';
+  kind: 'tauri' | 'browser';
   dirs: PlatformDirs;
   fs: PlatformFs;
   /**
-   * Last-gasp write for beforeunload. Synchronous on Electron; fire-and-forget
-   * on Tauri (the IPC message is posted before the page unloads, the Rust side
-   * outlives the webview teardown).
+   * Last-gasp write for beforeunload: fire-and-forget — the IPC message is
+   * posted before the page unloads and the Rust side outlives the webview
+   * teardown.
    */
   writeTextLastGasp(path: string, data: string): void;
-  /** Absolute path of a dropped/picked File. Electron-only; null on Tauri. */
-  pathForFile(file: File): string | null;
   /**
    * Native multi-file picker. Returns absolute paths, [] on cancel, or null
-   * when the host has no native picker (Electron — use a DOM file input).
+   * when the host has no native picker (plain browser).
    */
   pickFiles(extensions: string[]): Promise<string[] | null>;
   /**
-   * Native file-drop subscription. On Tauri the webview swallows DOM drop
-   * events and reports absolute paths here instead; on Electron this is a
-   * no-op (the DOM handlers receive drops). Returns an unsubscribe.
+   * Native file-drop subscription: the webview swallows DOM drop events and
+   * reports absolute paths here instead. Returns an unsubscribe.
    */
   onFileDrop(cb: (paths: string[]) => void): () => void;
   ollama: {

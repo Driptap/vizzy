@@ -1,5 +1,4 @@
 import type { Platform } from './types';
-import { createElectronPlatform } from './electron';
 import { createTauriPlatform } from './tauri';
 
 export type { Platform, OllamaStatus, OllamaProgress } from './types';
@@ -8,11 +7,9 @@ export { joinPath, extname } from './types';
 export const isTauri = (): boolean =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-const hasNodeIntegration = (): boolean =>
-  typeof window !== 'undefined' && typeof window.require === 'function';
-
-// Plain-browser fallback (dev server in a browser tab, jsdom tests): file IO
-// and the managed runtime are unavailable, but nothing throws at construction.
+// Plain-browser fallback (vite dev server in a browser tab, jsdom tests):
+// file IO and the managed runtime are unavailable, but nothing throws at
+// construction.
 const unavailable = (): Promise<never> =>
   Promise.reject(new Error('No desktop host — file access unavailable'));
 
@@ -37,7 +34,6 @@ function createBrowserPlatform(): Platform {
       mkdir: unavailable,
     },
     writeTextLastGasp: () => {},
-    pathForFile: () => null,
     pickFiles: async () => null,
     onFileDrop: () => () => {},
     ollama: {
@@ -51,10 +47,6 @@ function createBrowserPlatform(): Platform {
 let platform: Platform | null = null;
 
 export function getPlatform(): Platform {
-  platform ??= isTauri()
-    ? createTauriPlatform()
-    : hasNodeIntegration()
-      ? createElectronPlatform()
-      : createBrowserPlatform();
+  platform ??= isTauri() ? createTauriPlatform() : createBrowserPlatform();
   return platform;
 }

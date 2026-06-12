@@ -137,11 +137,9 @@ export default function App() {
           sceneLetter={sceneLetter}
           onSaveDeck={library.handleSaveDeckScene}
           onAssignDeck={library.handleAssignDeck}
-          onAddModels={library.handleAddModels}
           onAddPaths={library.handleAddPaths}
           onAssignModel={library.handleAssignModel}
           onAssignLandscape={library.handleAssignLandscape}
-          onAddSprites={library.handleAddSprites}
           onAssignSprite={library.handleAssignSprite}
           onAssignScene={library.handleAssignScene}
           onDelete={library.handleDeleteEntry}

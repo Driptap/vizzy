@@ -10,7 +10,8 @@ MIDI controller, all reacting to live audio input.
 
 ## Prerequisites
 
-- Node.js 20+ (only if running from source — packaged builds are on the
+- Node.js 20+ and a [Rust toolchain](https://rustup.rs) (only if running from
+  source — packaged builds are on the
   [latest release](https://github.com/Driptap/vizzy/releases/latest))
 - [Ollama](https://ollama.com) running locally with a code-capable model
   (see below)
@@ -37,26 +38,19 @@ machine, no API keys needed.
 
 ## Run
 
+The app is a Tauri 2 shell over a native Rust core (audio analysis, MIDI,
+managed Ollama runtime) with the React UI in the system webview — mid-way
+through the migration plan in `NATIVE_MIGRATION_PLAN.md`.
+
 ```bash
 npm install
 npm run model:pull   # download the default Ollama model (qwen2.5-coder)
-npm run dev          # vite dev server + electron, hot reload
-npm start            # production build + electron
+npm run dev          # vite dev server + tauri shell, hot reload
+npm run dist         # native release bundle (dmg / nsis / AppImage + deb)
 ```
 
-### Native shell (Tauri — migration in progress)
-
-The app is migrating to a Tauri 2 shell with a native Rust core (audio
-analysis, MIDI, managed Ollama runtime) per `NATIVE_MIGRATION_PLAN.md`.
-Requires a [Rust toolchain](https://rustup.rs).
-
-```bash
-npm run dev:tauri    # vite dev server + tauri shell, hot reload
-npm run dist:tauri   # native release bundle (dmg / nsis / AppImage + deb)
-```
-
-Known gaps vs the Electron build until the native renderer lands (Phase 2):
-no master-output pop-out window.
+Known gap until the native renderer lands (Phase 2): no master-output
+pop-out window.
 
 ## Usage
 
@@ -87,9 +81,11 @@ no master-output pop-out window.
   validated (raw GL precompile + hidden three.js render) before being swapped
   in. A master composite shader mixes the 4 targets to the main canvas.
   Deck previews are read back at 160×90, round-robin one deck per frame.
-- `src/engine/AudioEngine.js` — getUserMedia → AnalyserNode (fftSize 512),
-  band averages lerped at 0.15/frame.
-- `src/engine/MidiEngine.js` — Web MIDI CC listener with learn-mode binding.
+- `src-tauri/src/audio.rs` — native input capture (cpal) + 512-point FFT
+  (rustfft) replicating Web Audio's AnalyserNode band analysis; the TS side
+  lerps the bands at 0.15/frame as before.
+- `src-tauri/src/midi.rs` — native MIDI input stream (midir);
+  `src/engine/MidiEngine.js` keeps the CC learn-mode binding logic.
 - `src/llm/ollama.js` — sequential generation queue + system prompt wrapper.
 - `src/llm/parser.js` — extracts the GLSL body (helpers + `void main()`)
   from raw LLM output, stripping markdown/prose and reserved redeclarations.

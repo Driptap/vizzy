@@ -50,7 +50,6 @@ export function createTauriPlatform(): Platform {
     writeTextLastGasp: (p, data) => {
       void tfs.writeTextFile(p, data).catch(() => {});
     },
-    pathForFile: () => null,
     pickFiles: async (extensions) => {
       const picked = await openDialog({
         multiple: true,

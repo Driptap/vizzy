@@ -3,30 +3,28 @@ import fsp from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { makeNodePlatform } from '../test/fakePlatform';
 
-// The library reaches Electron + node through window.require at module scope;
-// give it the real fs against a fresh temp userData dir per test, so these
-// tests exercise the actual read/write/copy logic end to end.
+// The library reaches the host through the platform layer; back it with the
+// real fs against a fresh temp userData dir per test, so these tests
+// exercise the actual read/write/copy logic end to end.
 let root;
 let lib;
+let plat;
+
+vi.mock('../platform', async () => {
+  const types = await vi.importActual('../platform/types');
+  return {
+    joinPath: types.joinPath,
+    extname: types.extname,
+    isTauri: () => false,
+    getPlatform: () => plat,
+  };
+});
 
 beforeEach(async () => {
   root = await fsp.mkdtemp(path.join(os.tmpdir(), 'vizzy-lib-'));
-  const dirs = {
-    'vizzy:get-shaders-dir': path.join(root, 'shaders'),
-    'vizzy:get-models-dir': path.join(root, 'models'),
-    'vizzy:get-sprites-dir': path.join(root, 'sprites'),
-    'vizzy:get-user-data-dir': root,
-  };
-  const modules = {
-    electron: {
-      ipcRenderer: { invoke: vi.fn(async (channel) => dirs[channel]) },
-      webUtils: { getPathForFile: (file) => file.__path },
-    },
-    'fs/promises': fsp,
-    path,
-  };
-  window.require = (name) => modules[name];
+  plat = makeNodePlatform(root);
   vi.resetModules();
   lib = await import('./shaderLibrary');
 });
@@ -142,11 +140,5 @@ describe('seeded marker', () => {
     await lib.writeSeededMarker();
     expect(await lib.hasSeededMarker()).toBe(true);
     expect(fsSync.existsSync(path.join(root, '.vizzy-seeded'))).toBe(true);
-  });
-});
-
-describe('filePathOf', () => {
-  it('resolves a dropped File through webUtils', () => {
-    expect(lib.filePathOf({ __path: '/abs/file.glb' })).toBe('/abs/file.glb');
   });
 });

@@ -22,8 +22,8 @@ interface NativeMidiMessage {
 
 /**
  * MIDI learn/binding engine. The learn and routing logic is host-agnostic;
- * only the transport differs: Web MIDI under Electron, the Rust core's
- * midir event stream under Tauri (whose webviews lack Web MIDI).
+ * only the transport differs: the Rust core's midir event stream under
+ * Tauri (whose webviews lack Web MIDI), Web MIDI in a plain browser tab.
  */
 export class MidiEngine {
   onControlValue?: MidiHandlers['onControlValue'];

@@ -4,7 +4,7 @@ import type { DeckStatus } from '../types';
 export const DEFAULT_MODEL = 'qwen2.5-coder';
 
 // A user-run Ollama on the default port wins; the app-managed one (spawned
-// by electron/ollama-manager.cjs) listens one port up.
+// by src-tauri/src/ollama.rs) listens one port up.
 export const DEFAULT_BASE = 'http://127.0.0.1:11434';
 export const MANAGED_BASE = 'http://127.0.0.1:11435';
 

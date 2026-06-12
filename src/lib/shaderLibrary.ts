@@ -1,6 +1,5 @@
 // File-backed shader library: one JSON file per shader in <userData>/shaders/.
-// All host access (file IO, data dirs, dropped-file paths) goes through the
-// platform layer so the same code runs under Electron and Tauri.
+// All host access (file IO, data dirs) goes through the platform layer.
 import type {
   AssetEntry,
   DeckChannelConfig,
@@ -16,14 +15,6 @@ import { getPlatform, joinPath, extname } from '../platform';
 
 const makeId = (kind: string): string =>
   `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-/**
- * Absolute path of a dropped/picked File. Null on Tauri, where the webview
- * reports drop paths natively instead (see Platform.onFileDrop).
- */
-export function filePathOf(file: File): string | null {
-  return getPlatform().pathForFile(file);
-}
 
 // First-run marker as a FILE next to the library data — localStorage is
 // per-origin (dev server vs file://), so a localStorage-only flag re-seeds

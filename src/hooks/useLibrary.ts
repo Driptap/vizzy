@@ -6,7 +6,6 @@ import {
   saveDeck,
   saveModel,
   saveSprite,
-  filePathOf,
   renameShader,
   updateEntry,
   deleteEntry,
@@ -157,26 +156,6 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
-  const toItems = (files: File[]) =>
-    files.flatMap((file) => {
-      const sourcePath = filePathOf(file);
-      if (!sourcePath) {
-        console.warn('[Vizzy] No filesystem path for dropped file:', file.name);
-        return [];
-      }
-      return [{ sourcePath, name: file.name.replace(/\.[^.]+$/, '') }];
-    });
-
-  const handleAddModels = useCallback(
-    (files: File[]) => addModelPaths(toItems(files)),
-    [addModelPaths],
-  );
-
-  const handleAddSprites = useCallback(
-    (files: File[]) => addSpritePaths(toItems(files)),
-    [addSpritePaths],
-  );
-
   /** Route absolute paths (native drops / native picker) by extension. */
   const handleAddPaths = useCallback(
     async (paths: string[]) => {
@@ -194,8 +173,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     [addModelPaths, addSpritePaths],
   );
 
-  // Tauri reports file drops as native paths (the webview swallows DOM drops);
-  // Electron's subscription is a no-op and the DOM handlers keep working.
+  // The webview swallows DOM drop events; file drops arrive as native paths.
   useEffect(() => getPlatform().onFileDrop((paths) => void handleAddPaths(paths)), [handleAddPaths]);
 
   const handleAssignSprite = useCallback(
@@ -387,8 +365,6 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     libraryOpen,
     handleToggleLibrary,
     handleSaveDeck,
-    handleAddModels,
-    handleAddSprites,
     handleAddPaths,
     handleAssignSprite,
     handleAssignModel,
