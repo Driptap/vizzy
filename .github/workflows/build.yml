@@ -70,6 +70,9 @@ jobs:
 
   release:
     needs: build
+    # Publish whatever platforms built — a red Windows/Linux leg must not
+    # hold the macOS build hostage (it errors only if NO leg produced assets).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,12 +82,21 @@ jobs:
           path: builds
           merge-multiple: true
 
+      - name: Rename bundles to the stable names the site links to
+        run: |
+          mkdir -p assets
+          find builds -type f -name '*.dmg'      -exec cp {} assets/Vizzy-mac.dmg \;
+          find builds -type f -name '*.exe'      -exec cp {} assets/Vizzy-win.exe \;
+          find builds -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux.AppImage \;
+          find builds -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux.deb \;
+          ls -l assets
+
       - name: Update rolling "latest" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest builds/* \
+          gh release create latest assets/* \
             --title "Latest build" \
             --notes "Automated build of ${{ github.sha }}. Unsigned binaries — macOS will say Vizzy 'is damaged and can't be opened'. It isn't: move Vizzy.app to Applications, then run: xattr -dr com.apple.quarantine /Applications/Vizzy.app" \
             --latest
