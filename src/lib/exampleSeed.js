@@ -1,7 +1,37 @@
 // First-launch example content: two shaders, a canvas-drawn PNG sprite and a
 // procedurally generated STL torus, tied together in an "Example Deck"
 // preset. Everything is synthesized at runtime — no binary assets shipped.
-import { saveShader, saveDeck, saveAssetFromBuffer } from './shaderLibrary';
+import { saveShader, saveDeck, saveAssetFromBuffer, deleteEntry } from './shaderLibrary';
+
+export const EXAMPLE_DECK_NAME = 'Example Deck';
+const EXAMPLE_NAMES = new Set([
+  EXAMPLE_DECK_NAME,
+  'Example · Plasma Flow',
+  'Example · Neon Rings',
+  'Example · Neon Star',
+  'Example · Torus',
+]);
+
+/**
+ * Removes duplicate example entries left behind by repeated seeding (the
+ * pre-marker-file bug): keeps the newest of each example name — entries
+ * arrive newest-first, so the kept set is one self-consistent seed batch —
+ * and deletes the rest (including their asset files).
+ */
+export async function dedupeExampleEntries(entries) {
+  const seen = new Set();
+  const dupes = [];
+  entries.forEach((entry) => {
+    if (!EXAMPLE_NAMES.has(entry.name)) return;
+    if (seen.has(entry.name)) dupes.push(entry);
+    else seen.add(entry.name);
+  });
+  if (!dupes.length) return entries;
+  console.log(`[Vizzy] Removing ${dupes.length} duplicate example entries`);
+  await Promise.all(dupes.map((entry) => deleteEntry(entry).catch(() => {})));
+  const dupeIds = new Set(dupes.map((entry) => entry.id));
+  return entries.filter((entry) => !dupeIds.has(entry.id));
+}
 
 const PLASMA_BODY = `void main() {
   vec2 p = (vUv - 0.5) * vec2(u_resolution.x / u_resolution.y, 1.0);

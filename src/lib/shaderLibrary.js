@@ -45,6 +45,33 @@ export function filePathOf(file) {
   return webUtils.getPathForFile(file);
 }
 
+let userDataDirPromise = null;
+
+function userDataDir() {
+  if (!userDataDirPromise) {
+    userDataDirPromise = ipcRenderer.invoke('vizzy:get-user-data-dir');
+  }
+  return userDataDirPromise;
+}
+
+// First-run marker as a FILE next to the library data — localStorage is
+// per-origin (dev server vs file://), so a localStorage-only flag re-seeds
+// whenever the app is launched a different way.
+export async function hasSeededMarker() {
+  try {
+    await fs.access(path.join(await userDataDir(), '.vizzy-seeded'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writeSeededMarker() {
+  await fs
+    .writeFile(path.join(await userDataDir(), '.vizzy-seeded'), String(Date.now()))
+    .catch(() => {});
+}
+
 async function writeEntry(entry) {
   const dir = await shadersDir();
   await fs.writeFile(path.join(dir, `${entry.id}.json`), JSON.stringify(entry));

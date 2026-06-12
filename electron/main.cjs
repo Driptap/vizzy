@@ -66,6 +66,7 @@ app.whenReady().then(() => {
   ipcMain.handle('vizzy:get-sprites-dir', () =>
     path.join(app.getPath('userData'), 'sprites'),
   );
+  ipcMain.handle('vizzy:get-user-data-dir', () => app.getPath('userData'));
 
   registerOllamaIpc();
 

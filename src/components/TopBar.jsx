@@ -21,6 +21,7 @@ export function TopBar({
   midiLearn,
   onToggleMidiLearn,
   midiInputs,
+  onOpenTutorial,
 }) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
@@ -143,6 +144,15 @@ export function TopBar({
           }`}
         >
           {midiLearn ? 'MIDI Learn: ON' : 'MIDI Learn'}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenTutorial}
+          title="Quick tour: master view, audio, decks, library, mixing"
+          aria-label="Open tutorial"
+          className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-700 text-xs font-bold text-neutral-200 transition-colors hover:bg-cyan-600 hover:text-white"
+        >
+          ?
         </button>
       </div>
     </div>

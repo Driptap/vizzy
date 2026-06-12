@@ -11,6 +11,7 @@ import {
 import { catalogEntry } from './llm/models';
 import { extractShaderCode } from './llm/parser';
 import { TopBar } from './components/TopBar';
+import { Tutorial } from './components/Tutorial';
 import { SetupScreen } from './components/SetupScreen';
 import { DeckModule } from './components/DeckModule';
 import { Mixer } from './components/Mixer';
@@ -27,10 +28,17 @@ import {
   renameShader,
   updateEntry,
   deleteEntry,
+  hasSeededMarker,
+  writeSeededMarker,
 } from './lib/shaderLibrary';
 import { loadModelObject } from './lib/modelLoader';
 import { loadSpriteTexture, makeSpriteThumbnail } from './lib/spriteLoader';
-import { seedExampleLibrary } from './lib/exampleSeed';
+import {
+  seedExampleLibrary,
+  dedupeExampleEntries,
+  EXAMPLE_DECK_NAME,
+} from './lib/exampleSeed';
+import { saveSession, saveSessionSync, loadSession } from './lib/session';
 
 const isShaderEntry = (e) => !e.kind;
 
@@ -59,6 +67,11 @@ export default function App() {
   const queueRef = useRef(null);
   // per-slot {code, error} of the last failed generation, fuels Regenerate
   const lastFailRef = useRef({});
+  // session persistence: gate saves until the initial restore has run, keep
+  // the latest snapshot for the sync beforeunload flush
+  const sessionReadyRef = useRef(false);
+  const sessionSnapshotRef = useRef(null);
+  const sessionTimerRef = useRef(null);
   // fall back to the pre-rebrand (promptvj.*) keys so settings survive
   const modelRef = useRef(
     localStorage.getItem('vizzy.model') || localStorage.getItem('promptvj.model') || DEFAULT_MODEL,
@@ -97,6 +110,7 @@ export default function App() {
   const [controlMap, setControlMap] = useState({});
   const [midiInputs, setMidiInputs] = useState(0);
   const [masterOpen, setMasterOpen] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
 
   const setDeckState = useCallback((slot, status, error = null) => {
     setDecks((prev) => prev.map((d, i) => (i === slot ? { status, error } : d)));
@@ -243,12 +257,6 @@ export default function App() {
 
     engineRef.current?.setMasterCanvas(canvas);
     setMasterOpen(true);
-  }, []);
-
-  useEffect(() => {
-    listShaders()
-      .then(setLibrary)
-      .catch((err) => console.warn('[Vizzy] Could not load shader library:', err));
   }, []);
 
   // LLM bootstrap: a reachable server with the chosen model means we're done;
@@ -579,25 +587,126 @@ export default function App() {
     [assignDeckEntry, library],
   );
 
+  // Restore a saved session: re-stage every slot's content (shader code is
+  // stored inline; models/sprites by library id) and put back all config.
+  const restoreSession = useCallback(
+    (session, entries) => {
+      const engine = engineRef.current;
+      if (!engine || !Array.isArray(session.slots)) return;
+      const byId = new Map(entries.map((e) => [e.id, e]));
+
+      session.slots.slice(0, SLOTS).forEach(async (slot, i) => {
+        const src = slot.source || {};
+        try {
+          if (src.type === 'shader' && src.code) {
+            const result = engine.stageShader(i, src.code);
+            if (result.ok) {
+              setDeckState(i, 'active');
+              setSourceType(i, 'shader');
+            }
+          } else if (src.type === 'model' && byId.has(src.modelId)) {
+            const entry = byId.get(src.modelId);
+            const object = await loadModelObject(await getModelFilePath(entry));
+            await engine.stageModel(i, object, entry.id);
+            setDeckState(i, 'active');
+            setSourceType(i, 'model');
+          } else if (src.type === 'sprite' && byId.has(src.spriteId)) {
+            const entry = byId.get(src.spriteId);
+            const { texture, aspect } = await loadSpriteTexture(await getSpriteFilePath(entry));
+            engine.stageSprite(i, texture, aspect, entry.id);
+            setDeckState(i, 'active');
+            setSourceType(i, 'sprite');
+          }
+        } catch (err) {
+          console.warn('[Vizzy] Session restore failed for slot', i, err);
+        }
+      });
+
+      const perSlot = (fromSlot, fallback) =>
+        Array.from({ length: SLOTS }, (_, i) =>
+          session.slots[i] ? fromSlot(session.slots[i]) : fallback(i),
+        );
+      setPrompts(perSlot((s) => s.prompt ?? '', () => ''));
+      setOpacities(perSlot((s) => s.opacity ?? 0, (i) => INITIAL_OPACITIES[i]));
+      setMuted(perSlot((s) => Boolean(s.muted), () => false));
+      setScales(perSlot((s) => s.scale ?? 1, () => 1));
+      setSizes(perSlot((s) => ({ x: 1, y: 1, ...(s.size || {}) }), () => ({ x: 1, y: 1 })));
+      setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
+      setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
+      setCrossfade(session.crossfade ?? 0);
+      setCueScene(session.cueScene ?? 0);
+    },
+    [setDeckState, setSourceType],
+  );
+
   useEffect(() => {
     (async () => {
       try {
-        let entries = await listShaders();
-        // first launch: create the example content and put it on scene A
-        if (!localStorage.getItem('vizzy.seeded')) {
+        let entries = await dedupeExampleEntries(await listShaders());
+        // First launch only: create the example content and put it on scene A.
+        // The marker is a FILE in userData (localStorage is per-origin, so it
+        // alone re-seeded when switching between dev server and built app);
+        // an existing Example Deck also counts as already-seeded.
+        const alreadySeeded =
+          (await hasSeededMarker()) ||
+          localStorage.getItem('vizzy.seeded') ||
+          entries.some((e) => e.kind === 'deck' && e.name === EXAMPLE_DECK_NAME);
+        if (!alreadySeeded) {
           const { deck, entries: seeded } = await seedExampleLibrary();
+          await writeSeededMarker();
           localStorage.setItem('vizzy.seeded', '1');
           entries = [...seeded, ...entries];
           setLibrary(entries);
           assignDeckEntry(deck, 0, entries);
-          return;
+        } else {
+          await writeSeededMarker(); // heal installs that only had the localStorage flag
+          setLibrary(entries);
+          const session = await loadSession();
+          if (session) restoreSession(session, entries);
         }
-        setLibrary(entries);
       } catch (err) {
         console.warn('[Vizzy] Could not load shader library:', err);
+      } finally {
+        sessionReadyRef.current = true;
       }
     })();
-  }, [assignDeckEntry]);
+  }, [assignDeckEntry, restoreSession]);
+
+  // Autosave: snapshot the whole performance state on any change, debounced
+  // to disk; the latest snapshot is also flushed synchronously on app close.
+  useEffect(() => {
+    if (!sessionReadyRef.current) return undefined;
+    const engine = engineRef.current;
+    const snapshot = {
+      version: 1,
+      crossfade,
+      cueScene,
+      slots: Array.from({ length: SLOTS }, (_, i) => ({
+        source: engine ? engine.getChannelSource(i) : { type: 'shader', code: null },
+        prompt: prompts[i],
+        opacity: opacities[i],
+        muted: muted[i],
+        scale: scales[i],
+        size: sizes[i],
+        fx: fx[i],
+        aut: aut[i],
+      })),
+    };
+    sessionSnapshotRef.current = snapshot;
+    clearTimeout(sessionTimerRef.current);
+    sessionTimerRef.current = setTimeout(() => {
+      saveSession(snapshot).catch((err) => console.warn('[Vizzy] Session save failed:', err));
+    }, 800);
+    return () => clearTimeout(sessionTimerRef.current);
+  }, [prompts, opacities, muted, scales, sizes, fx, aut, crossfade, cueScene, sourceTypes, decks]);
+
+  useEffect(() => {
+    const flush = () => {
+      if (sessionSnapshotRef.current) saveSessionSync(sessionSnapshotRef.current);
+    };
+    window.addEventListener('beforeunload', flush);
+    return () => window.removeEventListener('beforeunload', flush);
+  }, []);
 
   const handleDeleteShader = useCallback(async (id) => {
     await deleteEntry({ id });
@@ -716,6 +825,7 @@ export default function App() {
         midiLearn={midiLearn}
         onToggleMidiLearn={handleToggleMidiLearn}
         midiInputs={midiInputs}
+        onOpenTutorial={() => setTutorialOpen(true)}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -806,6 +916,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <Tutorial open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
     </div>
   );
 }
