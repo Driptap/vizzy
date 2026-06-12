@@ -29,7 +29,7 @@ describe('slot params layout', () => {
     engine.setChannelFx(2, 0.1, 1.2, -0.3, 0.9);
     engine.setLayer(2, 2);
 
-    const slots = engine.frame(0, 0.016);
+    const [slots] = engine.frame(0, 0.016);
     const o = 2 * 15;
     expect(slots[o]).toBeCloseTo(0.8); // mix
     expect(slots[o + 1]).toBeCloseTo(1.5); // scale (no AUT -> base)
@@ -50,7 +50,7 @@ describe('slot params layout', () => {
     engine.setAudioRouting(0, 'high', 2);
     engine.setAudioRouting(1, 'level', 0.5);
 
-    const slots = engine.frame(0, 0.016);
+    const [slots] = engine.frame(0, 0.016);
     expect(slots[11]).toBe(1); // low 0.5*2 clamped
     expect(slots[12]).toBeCloseTo(0.4); // mid 0.2*2
     expect(slots[13]).toBe(1); // high 0.9*2 clamped
@@ -81,7 +81,7 @@ describe('loop overrides', () => {
       lanes: { opacity: flatLane(0.5), scale: flatLane(1) },
     });
 
-    const slots = engine.frame(0, 0.016);
+    const [slots] = engine.frame(0, 0.016);
     expect(slots[0]).toBeCloseTo(0.25); // 0.5 knob * 0.5 lane
     expect(slots[1]).toBeCloseTo(3); // lane 1 -> top of 0.25..3 range
     engine.dispose();
@@ -96,10 +96,102 @@ describe('loop overrides', () => {
       divider: 4,
       lanes: { opacity: flatLane(0) },
     });
-    expect(engine.frame(0, 0.016)[0]).toBeCloseTo(0);
+    expect(engine.frame(0, 0.016)[0][0]).toBeCloseTo(0);
 
     engine.setLoop(0, null);
-    expect(engine.frame(0.1, 0.016)[0]).toBeCloseTo(0.5);
+    expect(engine.frame(0.1, 0.016)[0][0]).toBeCloseTo(0.5);
+    engine.dispose();
+  });
+});
+
+describe('deck ext block (Phase 3 content)', () => {
+  it('shader decks write mode 0 and nothing else', () => {
+    const engine = makeEngine();
+    const [, decks] = engine.frame(0, 0.016);
+    expect(decks[0]).toBe(0);
+    expect(decks[16]).toBe(0);
+    engine.dispose();
+  });
+
+  it('staged sprite writes mode 1 with the composed 2x2 matrix', async () => {
+    const engine = makeEngine();
+    invoke.mockImplementationOnce(async () => ({ width: 200, height: 100 })); // aspect 2
+    await engine.stageSpriteFromPath(1, '/tmp/a.png', 'sprite-1');
+
+    const viewAspect = 2;
+    const [, decks] = engine.frame(0, 0.016, viewAspect);
+    const o = 16;
+    expect(decks[o]).toBe(1); // mode sprite
+    // no AUT: rotation 0, mesh scale = base size; layout: h = min(1.7, 1.7*2/2)
+    // = 1.7, baseW = 3.4, baseH = 1.7; container x-comp = 1/2
+    expect(decks[o + 1]).toBeCloseTo(0.5 * 3.4); // m00 = cx*cos*sx
+    expect(decks[o + 2]).toBeCloseTo(0); // m01
+    expect(decks[o + 3]).toBeCloseTo(0); // m10
+    expect(decks[o + 4]).toBeCloseTo(1.7); // m11 = cos*sy
+    expect(decks[o + 9]).toBeCloseTo(1); // opacity, no flicker
+    expect(decks[o + 10]).toBe(1); // visible
+    engine.dispose();
+  });
+
+  it('staged model writes mode 2 with per-axis scale and light state', async () => {
+    const engine = makeEngine();
+    await engine.stageModelFromPath(2, '/tmp/m.glb', 'model-1');
+    engine.setLighting(2, 1.5, 0.7);
+
+    const [, decks] = engine.frame(1, 0.016);
+    const o = 2 * 16;
+    expect(decks[o]).toBe(2); // mode model
+    expect(decks[o + 7]).toBeCloseTo(1, 1); // quaternion w ~ 1 (no spin yet)
+    expect(decks[o + 8]).toBeCloseTo(1); // sclX (baseScale 1, no AUT)
+    expect(decks[o + 12]).toBeCloseTo(1); // sclY
+    expect(decks[o + 13]).toBeCloseTo(1); // sclZ
+    expect(decks[o + 9]).toBeCloseTo(1.5); // brightness
+    expect(decks[o + 10]).toBeCloseTo(0.7); // lightAngle
+    expect(decks[o + 11]).toBe(1); // visible
+    engine.dispose();
+  });
+
+  it('staged landscape writes mode 3 with camera and tile state', async () => {
+    const engine = makeEngine();
+    invoke.mockImplementationOnce(async () => ({ span: 9, camHeight: 1.2 }));
+    await engine.stageLandscapeFromPath(3, '/tmp/terrain.glb', 'model-2');
+
+    const [, decks] = engine.frame(0, 0.5); // dt advances the scroll
+    const o = 3 * 16;
+    expect(decks[o]).toBe(3); // mode flight
+    expect(decks[o + 3]).toBeCloseTo(9 * 0.45); // camZ fixed at span*0.45
+    // scroll = 0.5 * (9/9) * 1 = 0.5 -> tile z = (0.5 % 18) - 9
+    expect(decks[o + 8]).toBeCloseTo(0.5 - 9); // tile1Z
+    expect(decks[o + 9]).toBeCloseTo(9.5 - 9); // tile2Z
+    expect(decks[o + 14]).toBe(64); // fov
+    engine.dispose();
+  });
+
+  it('non-shader decks pin composite uniforms to the knobs (no spin)', async () => {
+    const engine = makeEngine();
+    await engine.stageModelFromPath(0, '/tmp/m.glb', 'model-1');
+    engine.setScale(0, 1.4);
+    engine.setAutomation(0, {
+      scl: { amt: 1, audio: false },
+      rot: { amt: 1, audio: false },
+      tlt: { amt: 0, audio: false },
+      flk: { amt: 0, audio: false },
+      dst: { amt: 1, audio: false },
+      skw: { amt: 0, audio: false },
+    });
+    const [slots] = engine.frame(1, 0.016);
+    expect(slots[1]).toBeCloseTo(1.4); // scale pinned, AUT does not zoom-pulse
+    expect(slots[8]).toBe(0); // no composite warp for in-scene decks
+    engine.dispose();
+  });
+
+  it('getChannelSource reflects staged content', async () => {
+    const engine = makeEngine();
+    invoke.mockImplementationOnce(async () => ({ width: 10, height: 10 }));
+    await engine.stageSpriteFromPath(0, '/tmp/a.png', 'sprite-9');
+    expect(engine.getChannelSource(0)).toEqual({ type: 'sprite', spriteId: 'sprite-9' });
+    await engine.stageModelFromPath(1, '/tmp/m.glb', 'model-9');
+    expect(engine.getChannelSource(1)).toEqual({ type: 'model', modelId: 'model-9' });
     engine.dispose();
   });
 });
@@ -127,11 +219,14 @@ describe('staging', () => {
     engine.dispose();
   });
 
-  it('non-shader staging returns the Phase 3 stub error', async () => {
+  it('failed asset staging keeps the previous channel source', async () => {
     const engine = makeEngine();
-    const result = await engine.stageModel();
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/Phase 3/);
+    invoke.mockImplementationOnce(async () => {
+      throw 'unsupported model format .fbx';
+    });
+    const result = await engine.stageModelFromPath(0, '/tmp/m.fbx', 'model-1');
+    expect(result).toEqual({ ok: false, error: 'unsupported model format .fbx' });
+    expect(engine.getChannelSource(0).type).toBe('shader');
     engine.dispose();
   });
 });
