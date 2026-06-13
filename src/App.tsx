@@ -40,7 +40,7 @@ export default function App() {
   const audio = useAudioControls(audioRef);
   const master = useMasterWindow(engineRef);
 
-  // Syphon texture sharing lives in the render core; mirror its state here.
+  // Texture sharing (Syphon/Spout) lives in the render core; mirror state here.
   const [syphonOn, setSyphonOn] = useState(false);
   useEffect(() => {
     engineRef.current?.onTextureShare(setSyphonOn);

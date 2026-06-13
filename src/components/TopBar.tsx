@@ -3,6 +3,11 @@ import { MODEL_CATALOG } from '../llm/models';
 
 const CUSTOM = '__custom__';
 
+// Texture sharing publishes the master over the platform-native protocol:
+// Syphon on macOS, Spout on Windows. Name the toggle after whichever the
+// user's receiver software (Resolume, MadMapper, OBS) will list it under.
+const SHARE_PROTOCOL = /Windows/i.test(navigator.userAgent) ? 'Spout' : 'Syphon';
+
 interface TopBarProps {
   libraryOpen: boolean;
   onToggleLibrary: () => void;
@@ -110,7 +115,7 @@ export function TopBar({
       <button
         type="button"
         onClick={onToggleSyphon}
-        title="Share the master output with other VJ apps (Resolume, MadMapper, OBS) over Syphon — macOS only"
+        title={`Share the master output with other VJ apps (Resolume, MadMapper, OBS) over ${SHARE_PROTOCOL}`}
         className={`whitespace-nowrap rounded px-3 py-1 text-xs font-semibold transition-colors ${
           syphonOn
             ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
@@ -121,7 +126,7 @@ export function TopBar({
         <span aria-hidden className={`mr-1 ${syphonOn ? '' : 'opacity-0'}`}>
           ●
         </span>
-        Syphon
+        {SHARE_PROTOCOL}
       </button>
 
       <button

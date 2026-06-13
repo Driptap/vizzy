@@ -153,9 +153,9 @@ pub(crate) enum Job {
     CloseMaster {
         reply: SyncSender<()>,
     },
-    /// Start/stop the Syphon server (render thread owns it). Replies with
-    /// the resulting share state.
-    #[cfg(target_os = "macos")]
+    /// Start/stop texture sharing (render thread owns the server): Syphon on
+    /// macOS, Spout on Windows. Replies with the resulting share state.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     TextureShare {
         on: bool,
         reply: SyncSender<Result<bool, String>>,
@@ -426,9 +426,10 @@ pub async fn render_stage_scene(
     Ok(LandscapeMeta { span, cam_height })
 }
 
-/// Toggle Syphon texture sharing of the master composite. Returns the
-/// resulting share state and notifies the UI via TEXTURE_SHARE_EVENT.
-#[cfg(target_os = "macos")]
+/// Toggle texture sharing of the master composite — Syphon on macOS, Spout on
+/// Windows. Returns the resulting share state and notifies the UI via
+/// TEXTURE_SHARE_EVENT.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[tauri::command]
 pub fn render_texture_share(
     app: tauri::AppHandle,
@@ -452,7 +453,7 @@ pub fn render_texture_share(
     Ok(sharing)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
 pub fn render_texture_share(
     app: tauri::AppHandle,
@@ -460,7 +461,7 @@ pub fn render_texture_share(
     on: bool,
 ) -> Result<bool, String> {
     let _ = (app, state, on);
-    Err("Texture sharing is macOS-only for now (Spout planned)".to_string())
+    Err("Texture sharing needs macOS (Syphon) or Windows (Spout)".to_string())
 }
 
 /// Toggle the master glow (bloom) post chain. Returns the resulting state
@@ -497,12 +498,111 @@ struct ReadTarget {
     padded_row: u32,
 }
 
+/// The Spout sender name, matching the Syphon server name so receivers see one
+/// "Vizzy Master" feed regardless of platform.
+#[cfg(target_os = "windows")]
+const SPOUT_SENDER_NAME: &str = "Vizzy Master";
+
+/// CPU readback of the master target for the Spout publish: a persistent
+/// staging buffer sized to the master (recreated on resize). Spout shares a
+/// D3D11 texture on its own device, so unlike Syphon there is no zero-copy
+/// path — the master is copied to host memory and re-uploaded.
+#[cfg(target_os = "windows")]
+struct MasterReadback {
+    staging: wgpu::Buffer,
+    size: (u32, u32),
+    padded_row: u32,
+}
+
+#[cfg(target_os = "windows")]
+impl MasterReadback {
+    fn new(device: &wgpu::Device, size: (u32, u32)) -> Self {
+        let padded_row = padded_bytes_per_row(size.0);
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vizzy-spout-readback"),
+            size: u64::from(padded_row) * u64::from(size.1),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            staging,
+            size,
+            padded_row,
+        }
+    }
+
+    /// Copy the master target to the staging buffer and return tightly-packed
+    /// top-down BGRA. The master renders upright (vs_present), so — unlike the
+    /// JPEG readbacks — its rows need no vertical flip. None on a failed map,
+    /// so a bad readback skips one published frame rather than killing publish.
+    fn read(&mut self, core: &GpuCore) -> Option<(Vec<u8>, u32, u32)> {
+        let (w, h) = core.master_target.size;
+        if (w, h) != self.size {
+            *self = Self::new(&core.device, (w, h));
+        }
+        let mut encoder = core
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("vizzy-spout-readback"),
+            });
+        encoder.copy_texture_to_buffer(
+            core.master_target.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        core.queue.submit(Some(encoder.finish()));
+
+        let slice = self.staging.slice(..);
+        let (tx, rx) = mpsc::sync_channel(1);
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        if core
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .is_err()
+        {
+            return None;
+        }
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(Ok(())) => {}
+            _ => return None,
+        }
+        let data = slice.get_mapped_range().to_vec();
+        self.staging.unmap();
+
+        let row = w as usize * 4;
+        let padded = self.padded_row as usize;
+        let mut pixels = Vec::with_capacity(row * h as usize);
+        for y in 0..h as usize {
+            let start = y * padded;
+            pixels.extend_from_slice(&data[start..start + row]);
+        }
+        Some((pixels, w, h))
+    }
+}
+
 /// The persistent offscreen master composite (see MASTER_FORMAT). Stored
 /// TOP-DOWN upright — fs_master renders with vs_present — so Syphon can
 /// publish it unflipped; the window pass re-flips while sampling.
 struct MasterTarget {
-    // read by the Syphon publish (macOS) and the GPU test readbacks only
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    // read by the Syphon (macOS) / Spout (Windows) publish and the GPU test
+    // readbacks only
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "windows")),
+        allow(dead_code)
+    )]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
@@ -2686,6 +2786,12 @@ fn render_loop(
     let mut master: Option<MasterOut> = None;
     #[cfg(target_os = "macos")]
     let mut syphon: Option<super::syphon::SyphonOut> = None;
+    #[cfg(target_os = "windows")]
+    let mut spout: Option<super::spout::SpoutOut> = None;
+    // Persistent CPU-readback target for the Spout publish (resizes with the
+    // master); only allocated once a Spout sender is running.
+    #[cfg(target_os = "windows")]
+    let mut spout_readback: Option<MasterReadback> = None;
     let mut frame: u64 = 0;
     let mut next_frame = Instant::now();
 
@@ -2766,6 +2872,25 @@ fn render_loop(
                     };
                     let _ = reply.send(result);
                 }
+                #[cfg(target_os = "windows")]
+                Ok(Job::TextureShare { on, reply }) => {
+                    let (mw, mh) = core.master_target.size;
+                    let result = match (on, &spout) {
+                        (true, None) => {
+                            super::spout::SpoutOut::new(SPOUT_SENDER_NAME, mw, mh).map(|out| {
+                                spout = Some(out);
+                                true
+                            })
+                        }
+                        (true, Some(_)) => Ok(true),
+                        (false, _) => {
+                            spout = None; // drop releases the sender registry slot
+                            spout_readback = None; // free the readback buffer
+                            Ok(false)
+                        }
+                    };
+                    let _ = reply.send(result);
+                }
                 Ok(Job::Stop) | Err(TryRecvError::Disconnected) => return,
                 Err(TryRecvError::Empty) => break,
             }
@@ -2823,6 +2948,18 @@ fn render_loop(
         #[cfg(target_os = "macos")]
         if let Some(out) = syphon.as_mut() {
             out.publish(&core.master_target.texture, core.master_target.size);
+        }
+
+        // Spout has no shared command queue with wgpu, so it goes through a CPU
+        // readback of the (already submitted) master target — top-down BGRA
+        // straight onto the shared D3D11 texture.
+        #[cfg(target_os = "windows")]
+        if let Some(out) = spout.as_mut() {
+            let readback = spout_readback
+                .get_or_insert_with(|| MasterReadback::new(&core.device, core.master_target.size));
+            if let Some((pixels, w, h)) = readback.read(&core) {
+                out.publish(&pixels, w, h);
+            }
         }
 
         if let Some(rgba) = core.read_target_rgba(&core.scene_target) {

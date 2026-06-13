@@ -435,10 +435,10 @@ export class NativeRenderEngine {
     this.masterClosedCbs.push(cb);
   }
 
-  // ---- Syphon texture sharing (macOS) ----
+  // ---- texture sharing (Syphon on macOS, Spout on Windows) ----
 
   /** Toggle sharing the master composite with other VJ apps. Resolves to the
-   *  resulting share state; rejects on non-mac platforms or GPU failure. */
+   *  resulting share state; rejects on unsupported platforms or GPU failure. */
   async setTextureShare(on: boolean): Promise<boolean> {
     return invoke<boolean>('render_texture_share', { on });
   }

@@ -45,6 +45,21 @@ objc2-metal = { version = "0.3", features = [
     "MTLTexture",
 ] }
 
+# Spout texture sharing (src/render/spout.rs): a native Spout 2 sender built on
+# raw Win32 — a D3D11 shared texture plus the shared-memory sender registry, no
+# C++ SDK linkage. Pinned to the windows crate version wgpu/tauri already pull.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
 [profile.release]
 strip = true
 lto = true
