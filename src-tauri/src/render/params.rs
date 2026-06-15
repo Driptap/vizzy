@@ -78,6 +78,9 @@ pub struct Slot {
     pub fx: [f32; 4],
     pub warp: [f32; 2],
     pub layer: f32,
+    /// Mirror-tile the content when scaled (true = today's fill look); false
+    /// shows a single scaled copy. Packed into the compositor `a.w` lane.
+    pub tile: bool,
     /// low, mid, high, level — final per-deck uniform values
     pub audio: [f32; 4],
 }
@@ -91,6 +94,7 @@ impl Default for Slot {
             fx: [0.0, 1.0, 0.0, 1.0],
             warp: [0.0, 0.0],
             layer: 4.0,
+            tile: true,
             audio: [0.0; 4],
         }
     }
@@ -157,7 +161,8 @@ pub fn sprite_clip_pos(s: &SpriteDraw, corner: [f32; 2]) -> [f32; 2] {
 }
 
 /// Pack the per-frame compositor uniform, matching `Uniforms` in
-/// compositor.wgsl: per slot vec4 a = (mix, scale, layer, 0),
+/// compositor.wgsl: per slot vec4 a = (mix, scale, layer, single),
+/// where single = 1 disables the mirror-tiling (a single scaled copy);
 /// vec4 b = (sizeX, sizeY, warpX, warpY), vec4 fx; then
 /// globals = (aspect, time, xfade, 0) and sel = (scene, previewSlot, 0, 0).
 pub fn pack_compositor_uniform(
@@ -173,6 +178,7 @@ pub fn pack_compositor_uniform(
         out[o] = s.mix;
         out[o + 1] = s.scale;
         out[o + 2] = s.layer;
+        out[o + 3] = if s.tile { 0.0 } else { 1.0 };
         out[o + 4] = s.size[0];
         out[o + 5] = s.size[1];
         out[o + 6] = s.warp[0];
@@ -239,6 +245,8 @@ mod tests {
                 fx: [v(4), v(5), v(6), v(7)],
                 warp: [v(8), v(9)],
                 layer: v(10),
+                // slot 5 tiles off → a.w packs single = 1.0; the rest tile.
+                tile: i != 5,
                 audio: [v(11), v(12), v(13), v(14)],
             };
         }
@@ -271,7 +279,7 @@ mod tests {
         assert_eq!(f(base), 500.0); // mix
         assert_eq!(f(base + 4), 501.0); // scale
         assert_eq!(f(base + 8), 510.0); // layer
-        assert_eq!(f(base + 12), 0.0); // pad
+        assert_eq!(f(base + 12), 1.0); // a.w = single (slot 5 has tile off)
         assert_eq!(f(base + 16), 502.0); // sizeX
         assert_eq!(f(base + 20), 503.0); // sizeY
         assert_eq!(f(base + 24), 508.0); // warpX

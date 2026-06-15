@@ -345,6 +345,12 @@ impl Evaluator {
             };
             slot.layer = s.layer;
             slot.audio = audio;
+            // Only sprite/video/model decks expose the tile toggle; shader and
+            // landscape/scene (Flight) decks keep mirror-tiling unconditionally.
+            slot.tile = match anim.content {
+                ContentAnim::Sprite { .. } | ContentAnim::Model { .. } => s.tile,
+                ContentAnim::Shader | ContentAnim::Flight { .. } => true,
+            };
             frame.slots[i] = SlotFrame {
                 uniforms: slot,
                 draw,

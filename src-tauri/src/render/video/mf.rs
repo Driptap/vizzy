@@ -209,8 +209,11 @@ unsafe fn sample_to_frame(sample: &IMFSample, width: u32, height: u32) -> Option
 /// Build a VT_I8 PROPVARIANT (for SetCurrentPosition, 100-ns units).
 unsafe fn propvariant_i8(value: i64) -> PROPVARIANT {
     let mut pv: PROPVARIANT = std::mem::zeroed();
-    pv.Anonymous.Anonymous.vt = VT_I8;
-    pv.Anonymous.Anonymous.Anonymous.hVal = value;
+    // `pv.Anonymous.Anonymous` is a `ManuallyDrop` union field — Rust won't
+    // auto-`DerefMut` into it for assignment, so deref it explicitly.
+    let inner = &mut *pv.Anonymous.Anonymous;
+    inner.vt = VT_I8;
+    inner.Anonymous.hVal = value;
     pv
 }
 

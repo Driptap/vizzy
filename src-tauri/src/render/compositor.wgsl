@@ -82,7 +82,7 @@ fn zoom_uv(uv: vec2<f32>, s: f32) -> vec2<f32> {
 // Returns premultiplied colour in rgb and COVERAGE in a (texture alpha masked
 // by the channel window). Alpha is treated as a brightness multiplier — LLMs
 // sometimes encode the shader's shape in gl_FragColor.a.
-fn deck_color(tex: texture_2d<f32>, uv: vec2<f32>, zoom: f32, size: vec2<f32>, fx: vec4<f32>, warp: vec2<f32>) -> vec4<f32> {
+fn deck_color(tex: texture_2d<f32>, uv: vec2<f32>, zoom: f32, size: vec2<f32>, fx: vec4<f32>, warp: vec2<f32>, single: f32) -> vec4<f32> {
   let aspect = uni.globals.x;
   let time = uni.globals.y;
   var local = (uv - vec2<f32>(0.5)) / max(size, vec2<f32>(0.001)) + vec2<f32>(0.5);
@@ -100,7 +100,8 @@ fn deck_color(tex: texture_2d<f32>, uv: vec2<f32>, zoom: f32, size: vec2<f32>, f
     sin(local.y * 12.0 + time * 5.0),
     sin(local.x * 10.0 + time * 4.0)
   );
-  let t = textureSampleLevel(tex, samp, zoom_uv(local, zoom), 0.0);
+  let zuv = zoom_uv(local, zoom);
+  let t = textureSampleLevel(tex, samp, zuv, 0.0);
   var col = t.rgb * t.a;
   col = (col - vec3<f32>(0.5)) * fx.y + vec3<f32>(0.5);
   // Hue rotates RGB about the grey axis (Rodrigues).
@@ -110,7 +111,11 @@ fn deck_color(tex: texture_2d<f32>, uv: vec2<f32>, zoom: f32, size: vec2<f32>, f
   col = col * hc + cross(k, col) * hs + k * dot(k, col) * (1.0 - hc);
   let luma = dot(col, vec3<f32>(0.299, 0.587, 0.114));
   col = mix(vec3<f32>(luma), col, fx.w);
-  let mask = inside.x * inside.y;
+  // single mode: clip the mirror-repeats outside the scaled [0,1] frame so only
+  // one copy shows. single = 0 keeps the full mirror-tiled fill (default look).
+  let zin = step(vec2<f32>(0.0), zuv) * step(zuv, vec2<f32>(1.0));
+  let rep = select(1.0, zin.x * zin.y, single > 0.5);
+  let mask = inside.x * inside.y * rep;
   return vec4<f32>(max(col, vec3<f32>(0.0)) * mask, t.a * mask);
 }
 
@@ -133,18 +138,18 @@ fn layer_stack(d1: vec4<f32>, d2: vec4<f32>, d3: vec4<f32>, d4: vec4<f32>, l: ve
 }
 
 fn stack_a(uv: vec2<f32>) -> vec3<f32> {
-  let d1 = deck_color(deck0, uv, uni.slots[0].a.y, uni.slots[0].b.xy, uni.slots[0].fx, uni.slots[0].b.zw) * uni.slots[0].a.x;
-  let d2 = deck_color(deck1, uv, uni.slots[1].a.y, uni.slots[1].b.xy, uni.slots[1].fx, uni.slots[1].b.zw) * uni.slots[1].a.x;
-  let d3 = deck_color(deck2, uv, uni.slots[2].a.y, uni.slots[2].b.xy, uni.slots[2].fx, uni.slots[2].b.zw) * uni.slots[2].a.x;
-  let d4 = deck_color(deck3, uv, uni.slots[3].a.y, uni.slots[3].b.xy, uni.slots[3].fx, uni.slots[3].b.zw) * uni.slots[3].a.x;
+  let d1 = deck_color(deck0, uv, uni.slots[0].a.y, uni.slots[0].b.xy, uni.slots[0].fx, uni.slots[0].b.zw, uni.slots[0].a.w) * uni.slots[0].a.x;
+  let d2 = deck_color(deck1, uv, uni.slots[1].a.y, uni.slots[1].b.xy, uni.slots[1].fx, uni.slots[1].b.zw, uni.slots[1].a.w) * uni.slots[1].a.x;
+  let d3 = deck_color(deck2, uv, uni.slots[2].a.y, uni.slots[2].b.xy, uni.slots[2].fx, uni.slots[2].b.zw, uni.slots[2].a.w) * uni.slots[2].a.x;
+  let d4 = deck_color(deck3, uv, uni.slots[3].a.y, uni.slots[3].b.xy, uni.slots[3].fx, uni.slots[3].b.zw, uni.slots[3].a.w) * uni.slots[3].a.x;
   return layer_stack(d1, d2, d3, d4, vec4<f32>(uni.slots[0].a.z, uni.slots[1].a.z, uni.slots[2].a.z, uni.slots[3].a.z));
 }
 
 fn stack_b(uv: vec2<f32>) -> vec3<f32> {
-  let d1 = deck_color(deck4, uv, uni.slots[4].a.y, uni.slots[4].b.xy, uni.slots[4].fx, uni.slots[4].b.zw) * uni.slots[4].a.x;
-  let d2 = deck_color(deck5, uv, uni.slots[5].a.y, uni.slots[5].b.xy, uni.slots[5].fx, uni.slots[5].b.zw) * uni.slots[5].a.x;
-  let d3 = deck_color(deck6, uv, uni.slots[6].a.y, uni.slots[6].b.xy, uni.slots[6].fx, uni.slots[6].b.zw) * uni.slots[6].a.x;
-  let d4 = deck_color(deck7, uv, uni.slots[7].a.y, uni.slots[7].b.xy, uni.slots[7].fx, uni.slots[7].b.zw) * uni.slots[7].a.x;
+  let d1 = deck_color(deck4, uv, uni.slots[4].a.y, uni.slots[4].b.xy, uni.slots[4].fx, uni.slots[4].b.zw, uni.slots[4].a.w) * uni.slots[4].a.x;
+  let d2 = deck_color(deck5, uv, uni.slots[5].a.y, uni.slots[5].b.xy, uni.slots[5].fx, uni.slots[5].b.zw, uni.slots[5].a.w) * uni.slots[5].a.x;
+  let d3 = deck_color(deck6, uv, uni.slots[6].a.y, uni.slots[6].b.xy, uni.slots[6].fx, uni.slots[6].b.zw, uni.slots[6].a.w) * uni.slots[6].a.x;
+  let d4 = deck_color(deck7, uv, uni.slots[7].a.y, uni.slots[7].b.xy, uni.slots[7].fx, uni.slots[7].b.zw, uni.slots[7].a.w) * uni.slots[7].a.x;
   return layer_stack(d1, d2, d3, d4, vec4<f32>(uni.slots[4].a.z, uni.slots[5].a.z, uni.slots[6].a.z, uni.slots[7].a.z));
 }
 
@@ -184,14 +189,14 @@ fn fs_preview(in: VsOut) -> @location(0) vec4<f32> {
   let i = i32(uni.sel.y + 0.5);
   var d: vec4<f32>;
   switch i {
-    case 0: { d = deck_color(deck0, in.uv, uni.slots[0].a.y, uni.slots[0].b.xy, uni.slots[0].fx, uni.slots[0].b.zw); }
-    case 1: { d = deck_color(deck1, in.uv, uni.slots[1].a.y, uni.slots[1].b.xy, uni.slots[1].fx, uni.slots[1].b.zw); }
-    case 2: { d = deck_color(deck2, in.uv, uni.slots[2].a.y, uni.slots[2].b.xy, uni.slots[2].fx, uni.slots[2].b.zw); }
-    case 3: { d = deck_color(deck3, in.uv, uni.slots[3].a.y, uni.slots[3].b.xy, uni.slots[3].fx, uni.slots[3].b.zw); }
-    case 4: { d = deck_color(deck4, in.uv, uni.slots[4].a.y, uni.slots[4].b.xy, uni.slots[4].fx, uni.slots[4].b.zw); }
-    case 5: { d = deck_color(deck5, in.uv, uni.slots[5].a.y, uni.slots[5].b.xy, uni.slots[5].fx, uni.slots[5].b.zw); }
-    case 6: { d = deck_color(deck6, in.uv, uni.slots[6].a.y, uni.slots[6].b.xy, uni.slots[6].fx, uni.slots[6].b.zw); }
-    default: { d = deck_color(deck7, in.uv, uni.slots[7].a.y, uni.slots[7].b.xy, uni.slots[7].fx, uni.slots[7].b.zw); }
+    case 0: { d = deck_color(deck0, in.uv, uni.slots[0].a.y, uni.slots[0].b.xy, uni.slots[0].fx, uni.slots[0].b.zw, uni.slots[0].a.w); }
+    case 1: { d = deck_color(deck1, in.uv, uni.slots[1].a.y, uni.slots[1].b.xy, uni.slots[1].fx, uni.slots[1].b.zw, uni.slots[1].a.w); }
+    case 2: { d = deck_color(deck2, in.uv, uni.slots[2].a.y, uni.slots[2].b.xy, uni.slots[2].fx, uni.slots[2].b.zw, uni.slots[2].a.w); }
+    case 3: { d = deck_color(deck3, in.uv, uni.slots[3].a.y, uni.slots[3].b.xy, uni.slots[3].fx, uni.slots[3].b.zw, uni.slots[3].a.w); }
+    case 4: { d = deck_color(deck4, in.uv, uni.slots[4].a.y, uni.slots[4].b.xy, uni.slots[4].fx, uni.slots[4].b.zw, uni.slots[4].a.w); }
+    case 5: { d = deck_color(deck5, in.uv, uni.slots[5].a.y, uni.slots[5].b.xy, uni.slots[5].fx, uni.slots[5].b.zw, uni.slots[5].a.w); }
+    case 6: { d = deck_color(deck6, in.uv, uni.slots[6].a.y, uni.slots[6].b.xy, uni.slots[6].fx, uni.slots[6].b.zw, uni.slots[6].a.w); }
+    default: { d = deck_color(deck7, in.uv, uni.slots[7].a.y, uni.slots[7].b.xy, uni.slots[7].fx, uni.slots[7].b.zw, uni.slots[7].a.w); }
   }
   return vec4<f32>(d.rgb, 1.0);
 }

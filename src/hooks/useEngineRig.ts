@@ -63,7 +63,7 @@ export function useEngineRig({
 // while its fader position is preserved for unmute.
 export function useEngineSync(
   engineRef: EngineRef,
-  { opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, fx, filters, aut, videoPlayback, crossfade, cueScene }: PerformanceState,
+  { opacities, muted, scales, sizes, positions, lights, layers, tiles, loops, bpm, fx, filters, aut, videoPlayback, crossfade, cueScene }: PerformanceState,
 ): void {
   useEffect(() => {
     const engine = engineRef.current;
@@ -74,6 +74,7 @@ export function useEngineSync(
     positions.forEach((pos, i) => engine.setPosition(i, pos.x, pos.y));
     lights.forEach((l, i) => engine.setLighting(i, l.brightness, (l.angle * Math.PI) / 180));
     layers.forEach((layer, i) => engine.setLayer(i, layer));
+    tiles.forEach((tile, i) => engine.setTile(i, tile));
     loops.forEach((loop, i) => engine.setLoop(i, loop));
     engine.setBpm(bpm);
     fx.forEach((f, i) => {
@@ -84,7 +85,7 @@ export function useEngineSync(
     aut.forEach((a, i) => engine.setAutomation(i, a));
     videoPlayback.forEach((v, i) => engine.setVideoPlayback(i, v));
     engine.setCrossfade(crossfade);
-  }, [engineRef, opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, fx, filters, aut, videoPlayback, crossfade]);
+  }, [engineRef, opacities, muted, scales, sizes, positions, lights, layers, tiles, loops, bpm, fx, filters, aut, videoPlayback, crossfade]);
 
   useEffect(() => {
     engineRef.current?.setCueScene(cueScene);

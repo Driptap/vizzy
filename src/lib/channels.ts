@@ -48,6 +48,10 @@ export const DEFAULT_FILTER: ChannelFilter = { kind: 'none', amount: 0.5, param2
 // everything starts on the base layer; lift a deck to 1-3 to stack it on top
 export const DEFAULT_LAYER = 4;
 
+// mirror-tile a deck's content to fill the frame when scaled below 1 (today's
+// look). Sprite/video/model decks can toggle this off for a single scaled copy.
+export const DEFAULT_TILE = true;
+
 // channel automation (sprites AND models): per effect {amt: 0..1, audio: bool}
 // — audio couples the effect to the deck's routed level, otherwise it
 // self-runs on time LFOs
@@ -65,6 +69,7 @@ export const defaultChannelConfig = (): ChannelConfig => ({
   pos: { x: 0, y: 0 },
   light: { ...DEFAULT_LIGHT },
   layer: DEFAULT_LAYER,
+  tile: DEFAULT_TILE,
   fx: { ...DEFAULT_FX },
   aut: makeDefaultAut(),
   loop: defaultLoop(),

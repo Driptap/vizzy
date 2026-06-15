@@ -69,6 +69,7 @@ interface SlotState {
   lightAngle: number;
   band: AudioBand;
   amt: number;
+  tile: boolean;
   aut: AutomationMap;
   filter: SlotFilter;
   loop: DeckLoop | null;
@@ -106,6 +107,7 @@ const defaultSlot = (): SlotState => ({
   lightAngle: 0,
   band: 'level',
   amt: 1,
+  tile: true,
   aut: emptyAut(),
   filter: { kind: 'none', amount: 0.5, param2: 0.5 },
   loop: null,
@@ -340,6 +342,13 @@ export class NativeRenderEngine {
 
   setLayer(deckIndex: number, layer: number): void {
     this.slots[deckIndex].layer = layer;
+    this.markDirty();
+  }
+
+  // Mirror-tile the content to fill the frame when scaled (true = default look);
+  // false shows a single scaled copy. Only meaningful for sprite/video/model.
+  setTile(deckIndex: number, value: boolean): void {
+    this.slots[deckIndex].tile = value;
     this.markDirty();
   }
 

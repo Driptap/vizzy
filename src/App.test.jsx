@@ -16,6 +16,7 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.setPosition = vi.fn();
       this.setLighting = vi.fn();
       this.setLayer = vi.fn();
+      this.setTile = vi.fn();
       this.setLoop = vi.fn();
       this.setBpm = vi.fn();
       this.resetAllDecks = vi.fn();

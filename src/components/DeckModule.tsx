@@ -54,6 +54,9 @@ const FILTERS: { id: FilterKind; label: string; amt: string; p2?: string }[] = [
 // deck types with a real light rig (only sprites are unlit)
 const LIT_SOURCES: SourceType[] = ['model', 'landscape', 'scene'];
 
+// decks whose content can be mirror-tiled to fill the frame when scaled down
+const TILEABLE_SOURCES: SourceType[] = ['sprite', 'video', 'model'];
+
 const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'scl', label: 'SCL', title: 'Scaling' },
   { key: 'rot', label: 'ROT', title: 'Rotation' },
@@ -93,6 +96,9 @@ interface DeckModuleProps {
   /** compositing layer 1 (top) .. 4 (base) */
   layer: number;
   onLayerChange: (channel: number, layer: number) => void;
+  /** mirror-tile the content to fill when scaled (sprite/video/model only) */
+  tile: boolean;
+  onTileChange: (channel: number, value: boolean) => void;
   loop: DeckLoop;
   onLoopChange: (channel: number, loop: DeckLoop) => void;
   sourceType: SourceType;
@@ -141,6 +147,8 @@ export function DeckModule({
   onLightChange,
   layer,
   onLayerChange,
+  tile,
+  onTileChange,
   loop,
   onLoopChange,
   sourceType,
@@ -388,6 +396,28 @@ export function DeckModule({
               format={(v) => `${v.toFixed(2)}x`}
               onChange={(v) => onScaleChange(index, v)}
             />
+            {TILEABLE_SOURCES.includes(sourceType) && (
+              <div className="flex w-12 shrink-0 flex-col items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onTileChange(index, !tile)}
+                  aria-pressed={tile}
+                  title={
+                    tile
+                      ? 'Tiling on — content repeats to fill the frame as you scale down. Click for a single copy.'
+                      : 'Tiling off — a single scaled copy with empty margins. Click to tile and fill the frame.'
+                  }
+                  className={`flex h-9 w-9 items-center justify-center rounded-full border text-[8px] font-black transition-colors ${
+                    tile
+                      ? 'border-cyan-500 bg-cyan-600/30 text-cyan-200'
+                      : 'border-neutral-700 bg-neutral-900 text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  {tile ? 'ON' : 'OFF'}
+                </button>
+                <span className="text-[8px] font-bold tracking-wider text-neutral-500">TILE</span>
+              </div>
+            )}
             <Knob
               label="TILT"
               value={fx.tilt}

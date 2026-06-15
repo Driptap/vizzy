@@ -163,6 +163,9 @@ export interface ChannelConfig {
   light: ChannelLight;
   /** compositing layer 1 (top) .. 4 (base) */
   layer: number;
+  /** mirror-tile the content to fill the frame when scaled (sprite/video/model
+   *  decks toggle this; off = a single scaled copy). */
+  tile: boolean;
   fx: ChannelFx;
   aut: AutomationMap;
   loop: DeckLoop;

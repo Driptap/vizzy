@@ -314,6 +314,10 @@ export default function App() {
                   onLayerChange={(ch: number, l: number) =>
                     perf.applyLayer(slotIndex(perf.cueScene, ch), l)
                   }
+                  tile={perf.tiles[slot]}
+                  onTileChange={(ch: number, v: boolean) =>
+                    perf.applyTile(slotIndex(perf.cueScene, ch), v)
+                  }
                   loop={perf.loops[slot]}
                   onLoopChange={(ch, next) => perf.applyLoop(slotIndex(perf.cueScene, ch), next)}
                   sourceType={perf.sourceTypes[slot]}

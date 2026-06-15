@@ -7,6 +7,7 @@ import {
   DEFAULT_FILTER,
   DEFAULT_LIGHT,
   DEFAULT_LAYER,
+  DEFAULT_TILE,
   DEFAULT_VIDEO_PLAYBACK,
   makeDefaultAut,
   sceneOfSlot,
@@ -62,6 +63,7 @@ export function usePerformanceState() {
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })),
   );
   const [layers, setLayers] = useState<number[]>(() => Array(SLOTS).fill(DEFAULT_LAYER));
+  const [tiles, setTiles] = useState<boolean[]>(() => Array(SLOTS).fill(DEFAULT_TILE));
   const [loops, setLoops] = useState<DeckLoop[]>(() =>
     Array.from({ length: SLOTS }, defaultLoop),
   );
@@ -202,6 +204,10 @@ export function usePerformanceState() {
     [],
   );
 
+  const applyTile = useCallback((slot: number, value: boolean) => {
+    setTiles((prev) => prev.map((t, i) => (i === slot ? value : t)));
+  }, []);
+
   const setSourceType = useCallback((slot: number, type: SourceType) => {
     setSourceTypes((prev) => prev.map((s, i) => (i === slot ? type : s)));
   }, []);
@@ -214,6 +220,7 @@ export function usePerformanceState() {
     setPositions((prev) => prev.map((v, i) => (i === slot ? { x: 0, y: 0 } : v)));
     setLights((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_LIGHT } : v)));
     setLayers((prev) => prev.map((v, i) => (i === slot ? DEFAULT_LAYER : v)));
+    setTiles((prev) => prev.map((v, i) => (i === slot ? DEFAULT_TILE : v)));
     setLoops((prev) => prev.map((v, i) => (i === slot ? defaultLoop() : v)));
     setFx((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FX } : v)));
     setFilters((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FILTER } : v)));
@@ -231,6 +238,7 @@ export function usePerformanceState() {
     setPositions(Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 })));
     setLights(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_LIGHT })));
     setLayers(Array(SLOTS).fill(DEFAULT_LAYER));
+    setTiles(Array(SLOTS).fill(DEFAULT_TILE));
     setLoops(Array.from({ length: SLOTS }, defaultLoop));
     setFx(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
     setFilters(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FILTER })));
@@ -260,6 +268,7 @@ export function usePerformanceState() {
     setPositions((prev) => forScene(prev, (c, v) => (c.pos ? { ...c.pos } : v)));
     setLights((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_LIGHT, ...(c.light ?? v) })));
     setLayers((prev) => forScene(prev, (c, v) => c.layer ?? v));
+    setTiles((prev) => forScene(prev, (c, v) => c.tile ?? v));
     setLoops((prev) =>
       forScene(prev, (c, v) => (c.loop ? structuredClone(c.loop) : v)),
     );
@@ -291,6 +300,7 @@ export function usePerformanceState() {
     setPositions(perSlot((s) => ({ x: 0, y: 0, ...(s.pos || {}) }), () => ({ x: 0, y: 0 })));
     setLights(perSlot((s) => ({ ...DEFAULT_LIGHT, ...(s.light || {}) }), () => ({ ...DEFAULT_LIGHT })));
     setLayers(perSlot((s) => s.layer ?? DEFAULT_LAYER, () => DEFAULT_LAYER));
+    setTiles(perSlot((s) => s.tile ?? DEFAULT_TILE, () => DEFAULT_TILE));
     setLoops(
       perSlot((s) => (s.loop ? { ...defaultLoop(), ...structuredClone(s.loop) } : defaultLoop()), defaultLoop),
     );
@@ -326,6 +336,7 @@ export function usePerformanceState() {
     positions,
     lights,
     layers,
+    tiles,
     loops,
     bpm,
     bpmSync,
@@ -347,6 +358,7 @@ export function usePerformanceState() {
     applyPos,
     applyLight,
     applyLayer,
+    applyTile,
     applyLoop,
     applyBpm,
     applyBpmSync,

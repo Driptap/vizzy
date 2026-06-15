@@ -49,6 +49,10 @@ pub struct SlotState {
     pub light_angle: f32,
     pub band: String,
     pub amt: f32,
+    /// Mirror-tile the deck's content to fill the frame when scaled below 1
+    /// (today's look). Off = a single scaled copy with transparent margins.
+    /// Only sprite/video/model decks expose the toggle; others stay tiled.
+    pub tile: bool,
     pub aut: AutMap,
     pub filter: FilterState,
     #[serde(rename = "loop")]
@@ -132,6 +136,7 @@ impl Default for SlotState {
             light_angle: 0.0,
             band: "level".into(),
             amt: 1.0,
+            tile: true,
             aut: AutMap::default(),
             filter: FilterState::default(),
             loop_: None,
