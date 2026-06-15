@@ -6,12 +6,19 @@
 
 A desktop VJ instrument: type a prompt, a local LLM designs the visual, a
 native Rust/wgpu engine renders it. Two scenes × four decks, crossfaded,
-audio-reactive, MIDI-controlled, with Syphon output to other VJ software.
+audio-reactive, MIDI-controlled, with per-deck post filters and texture
+sharing (Syphon on macOS, Spout on Windows) into other VJ software.
 
 Decks can run LLM-designed **patches** (composed from a library of classic
 visualizer building blocks — spectrum bars, tunnels, plasma, fractals,
 matrix rain…), **images**, **3D models** (glTF/OBJ/STL, spinning or flown
-over as landscapes) and **procedural fly-through scenes**.
+over as landscapes) and **procedural fly-through scenes**. Everything you
+make autosaves to a file-backed library and the app reopens exactly as you
+left it.
+
+**New to Vizzy?** The [getting-started guide](https://www.sinanguclu.co.uk/vizzy/getting-started.html)
+walks through your first visual and switching on the sound. There's also a
+quick in-app tour (the **?** in the top bar).
 
 ## Prerequisites
 
@@ -69,11 +76,14 @@ Rust tests run from `src-tauri/`: `cargo test` (plus
    don't fight over the LLM. *SCENE* mode generates a 3D fly-through instead.
 3. **Mix** — four faders per scene feed the additive composite; the central
    crossfader blends scene A and B on the master output. Each deck has
-   layers, FX (tilt/contrast/hue/sat), per-control automation (AUT), and a
-   beat-locked loop sequencer driven by the global BPM.
+   layers, FX (tilt/contrast/hue/sat), a **post filter** (invert, hue shift,
+   posterize, pixelate, scanlines, edge, RGB split, kaleido, swirl, blur,
+   luma key, ripple — many audio-reactive), per-control automation (AUT), and
+   a beat-locked loop sequencer driven by the global BPM.
 4. **Master Out** — opens the composite in its own window; double-click it
-   for fullscreen on a projector. *Glow* adds a bloom pass on the master;
-   *Syphon* (macOS) publishes it to Resolume/MadMapper/OBS.
+   for fullscreen on a projector. *Glow* adds a bloom pass on the master; the
+   share toggle publishes it to Resolume/MadMapper/OBS over *Syphon* (macOS)
+   or *Spout* (Windows).
 5. **MIDI** — toggle *MIDI Learn*, click a fader, move a physical control:
    bound. Toggle Learn off to perform.
 6. **Library** — saves patches, deck presets (a whole scene's 4 channels),
@@ -97,7 +107,14 @@ Rust tests run from `src-tauri/`: `cargo test` (plus
   sRGB-correct Blinn-Phong lighting, 4× MSAA, landscape/scene flight rigs.
 - `src-tauri/src/render/evaluate.rs` — per-frame evaluation of loops,
   automation, and audio routing on the render thread's own clock.
+- `src-tauri/src/render/filter.wgsl` — the per-deck post-filter pass: one
+  pipeline whose `kind` selects the effect (invert, hue, posterize, pixelate,
+  scanlines, edge, RGB split, kaleido, swirl, blur, luma key, ripple), run
+  only when some deck has a filter selected; the order is shared with
+  `params.rs` and the UI selector.
 - `src-tauri/src/render/syphon.rs` — SyphonMetalServer via objc2 (macOS).
+- `src-tauri/src/render/spout.rs` — native Spout 2 sender, no C++ SDK, via a
+  CPU readback onto a shared D3D11 texture (Windows).
 - `src-tauri/src/audio.rs` — cpal input + rustfft band analysis, shared
   in-process with the render thread.
 - `src-tauri/src/midi.rs` — midir input stream; the CC learn/binding logic

@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vizzy — a toy VJ instrument</title>
-<meta name="description" content="Vizzy is a toy VJ app: type a prompt, a local LLM designs the visual, a native GPU engine renders it. Mix two scenes of decks with MIDI while everything reacts to audio.">
+<meta name="description" content="Vizzy is a toy VJ app: type a prompt, a local LLM designs the visual — patches, 3D models or procedural scenes — and a native GPU engine renders it. Mix two scenes of decks with MIDI and filters while everything reacts to audio.">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta property="og:title" content="Vizzy — a toy VJ instrument">
-<meta property="og:description" content="Prompts in, visuals out. LLM-designed patches on a native GPU engine — audio-reactive, MIDI-controlled, Syphon out. Free for macOS, Windows and Linux.">
+<meta property="og:description" content="Prompts in, visuals out. LLM-designed patches, 3D models and procedural scenes on a native GPU engine — audio-reactive, MIDI-controlled, Syphon/Spout out. Free for macOS, Windows and Linux.">
 <meta property="og:image" content="https://www.sinanguclu.co.uk/vizzy/og.png">
 <meta property="og:url" content="https://www.sinanguclu.co.uk/vizzy/">
 <meta property="og:type" content="website">
@@ -228,11 +228,11 @@
 
   <div class="how">
     <span><b>01</b> type a prompt</span>
-    <span><b>02</b> LLM designs a patch — tunnels · spectra · fractals · plasma</span>
-    <span><b>03</b> mix 2 scenes × 4 decks · MIDI · Syphon out</span>
+    <span><b>02</b> LLM designs it — patches (tunnels · spectra · fractals · plasma) · 3D models · scenes</span>
+    <span><b>03</b> mix 2 scenes × 4 decks · audio-reactive · filters · MIDI · Syphon/Spout out</span>
   </div>
 
-  <div class="downloads">
+  <div class="downloads" id="downloads">
     <a class="btn" href="https://github.com/Driptap/vizzy/releases/download/latest/Vizzy-mac.dmg">
        macOS<small>.dmg · apple silicon</small>
     </a>
@@ -245,12 +245,14 @@
   </div>
 
   <p class="links">
+    <a href="getting-started.html">getting started</a>
+    &nbsp;·&nbsp;
     <a href="https://github.com/Driptap/vizzy/releases/latest">all builds</a>
     &nbsp;·&nbsp;
     <a href="https://github.com/Driptap/vizzy">source on GitHub</a>
   </p>
 
-  <section class="setup">
+  <section class="setup" id="setup">
     <header>SETUP // GIVE VIZZY A BRAIN</header>
     <ol>
       <li>
@@ -286,6 +288,10 @@
       <li>
         Open Vizzy, type a prompt into a deck, hit <code>Generate</code>.
         First generation warms the model up, then it flows.
+        <span class="why">New here? The
+        <a href="getting-started.html">getting-started guide</a> walks you
+        through your first visual, switching on the sound, and mixing two
+        scenes.</span>
       </li>
     </ol>
   </section>
