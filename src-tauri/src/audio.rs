@@ -122,10 +122,14 @@ pub fn audio_list_devices() -> Result<Vec<AudioDevice>, String> {
     // "Computer audio" first, then the real capture devices. cpal has no stable
     // device IDs, so a name doubles as the ID.
     let mut devices = vec![system_entry(&host)];
-    devices.extend(inputs.filter_map(|d| d.name().ok()).map(|name| AudioDevice {
-        id: name.clone(),
-        label: name,
-    }));
+    devices.extend(
+        inputs
+            .filter_map(|d| d.name().ok())
+            .map(|name| AudioDevice {
+                id: name.clone(),
+                label: name,
+            }),
+    );
     Ok(devices)
 }
 
