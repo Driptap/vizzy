@@ -33,6 +33,20 @@ export function useSessionPersistence({
     sessionReadyRef.current = true;
   }, []);
 
+  // Re-gate autosave around a workspace import: the same guarantee as boot —
+  // the debounced save must not snapshot half-restored channels and overwrite
+  // the freshly-imported session.json. Caller re-enables with markSessionReady.
+  const suspendAutosave = useCallback(() => {
+    sessionReadyRef.current = false;
+    clearTimeout(sessionTimerRef.current);
+  }, []);
+
+  // Write the latest snapshot to disk immediately (skipping the debounce), so
+  // an export captures the live arrangement rather than one up to ~800ms stale.
+  const flushSession = useCallback(async () => {
+    if (sessionSnapshotRef.current) await saveSession(sessionSnapshotRef.current);
+  }, []);
+
   // Restore a saved session: re-stage every slot's content (shader code is
   // stored inline; models/sprites by library id) and put back all config.
   // Failures are logged, never fatal — the deck just stays on its default.
@@ -112,5 +126,5 @@ export function useSessionPersistence({
     return () => window.removeEventListener('beforeunload', flush);
   }, []);
 
-  return { restoreSession, loadSavedSession, markSessionReady };
+  return { restoreSession, loadSavedSession, markSessionReady, suspendAutosave, flushSession };
 }

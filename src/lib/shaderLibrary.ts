@@ -41,7 +41,7 @@ export async function writeSeededMarker(): Promise<void> {
   }
 }
 
-async function writeEntry(entry: LibraryEntry): Promise<void> {
+export async function writeEntry(entry: LibraryEntry): Promise<void> {
   const p = getPlatform();
   const dir = await p.dirs.shaders();
   await p.fs.writeText(joinPath(dir, `${entry.id}.json`), JSON.stringify(entry));
@@ -220,11 +220,38 @@ export async function getVideoFilePath(entry: VideoEntry): Promise<string> {
 }
 
 /** Asset-folder for a file-backed entry kind. */
-async function assetDirFor(kind: 'model' | 'sprite' | 'video'): Promise<string> {
+export async function assetDirFor(kind: 'model' | 'sprite' | 'video'): Promise<string> {
   const p = getPlatform();
   if (kind === 'model') return p.dirs.models();
   if (kind === 'video') return p.dirs.videos();
   return p.dirs.sprites();
+}
+
+/**
+ * Write an asset's bytes under its own `file` name, preserving the entry's id
+ * (unlike saveAssetFromBuffer, which mints a fresh id). Used by workspace
+ * import, where the entry — and its `file` reference — come from the bundle.
+ */
+export async function writeAssetBytes(entry: AssetEntry, bytes: Uint8Array): Promise<void> {
+  const dir = await assetDirFor(entry.kind);
+  await getPlatform().fs.writeBytes(joinPath(dir, entry.file), bytes);
+}
+
+/**
+ * Wipe the entire on-disk library: every entry JSON in shaders/ and every
+ * asset blob in models/sprites/videos/. The seeded marker and session.json
+ * live in userData root and are intentionally left untouched (the caller
+ * replaces the session explicitly; the marker keeps re-seeding from firing).
+ */
+export async function clearLibrary(): Promise<void> {
+  const p = getPlatform();
+  const dirs = await Promise.all([p.dirs.shaders(), p.dirs.models(), p.dirs.sprites(), p.dirs.videos()]);
+  await Promise.all(
+    dirs.map(async (dir) => {
+      const files = await p.fs.readDir(dir).catch(() => [] as string[]);
+      await Promise.all(files.map((file) => p.fs.remove(joinPath(dir, file))));
+    }),
+  );
 }
 
 /** Model/sprite/video entry from in-memory bytes (used by the first-run seeder). */

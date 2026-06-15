@@ -6,6 +6,8 @@ import { MODEL_CATALOG } from '../llm/models';
 const defaultProps = () => ({
   libraryOpen: false,
   onToggleLibrary: vi.fn(),
+  onOpenWorkspace: vi.fn(),
+  onSaveWorkspace: vi.fn(),
   masterOpen: false,
   onToggleMaster: vi.fn(),
   audioActive: false,
@@ -57,6 +59,14 @@ describe('TopBar', () => {
     expect(onToggleLibrary).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Master Out' }));
     expect(onToggleMaster).toHaveBeenCalled();
+  });
+
+  it('fires the workspace open/save handlers', () => {
+    const { onOpenWorkspace, onSaveWorkspace } = renderTopBar();
+    fireEvent.click(screen.getByRole('button', { name: 'Open…' }));
+    expect(onOpenWorkspace).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save As…' }));
+    expect(onSaveWorkspace).toHaveBeenCalled();
   });
 
   it('reflects master/audio/midi active state via styling, not resizing labels', () => {

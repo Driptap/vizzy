@@ -36,6 +36,7 @@ function createBrowserPlatform(): Platform {
     },
     writeTextLastGasp: () => {},
     pickFiles: async () => null,
+    saveFileDialog: async () => null,
     onFileDrop: () => () => {},
     ollama: {
       status: unavailable,

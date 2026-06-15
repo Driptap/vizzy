@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { appDataDir } from '@tauri-apps/api/path';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import * as tfs from '@tauri-apps/plugin-fs';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import type { Platform, OllamaProgress } from './types';
 import { joinPath } from './types';
 
@@ -60,6 +60,13 @@ export function createTauriPlatform(): Platform {
       });
       if (!picked) return [];
       return Array.isArray(picked) ? picked : [picked];
+    },
+    saveFileDialog: async ({ defaultName, extensions }) => {
+      const path = await saveDialog({
+        defaultPath: defaultName,
+        filters: [{ name: 'Vizzy workspace', extensions: extensions.map((e) => e.replace(/^\./, '')) }],
+      });
+      return path ?? null;
     },
     onFileDrop: (cb) => {
       let unlisten: UnlistenFn | null = null;

@@ -5,6 +5,7 @@ import { TopBar } from './components/TopBar';
 import { AudioMeterPanel } from './components/AudioMeterPanel';
 import { BpmSyncBridge } from './components/BpmSyncBridge';
 import { Tutorial } from './components/Tutorial';
+import { WorkspaceProgress } from './components/WorkspaceProgress';
 import { SetupScreen } from './components/SetupScreen';
 import { DeckModule } from './components/DeckModule';
 import { Mixer } from './components/Mixer';
@@ -136,6 +137,8 @@ export default function App() {
     restoreSession: session.restoreSession,
     loadSavedSession: session.loadSavedSession,
     markSessionReady: session.markSessionReady,
+    suspendAutosave: session.suspendAutosave,
+    flushSession: session.flushSession,
   });
 
   // Saved decks the performance view can cue, and the cue handler (loads a deck
@@ -188,6 +191,8 @@ export default function App() {
       <TopBar
         libraryOpen={library.libraryOpen}
         onToggleLibrary={library.handleToggleLibrary}
+        onOpenWorkspace={library.handleImportWorkspace}
+        onSaveWorkspace={library.handleExportWorkspace}
         masterOpen={master.masterOpen}
         onToggleMaster={master.handleToggleMaster}
         perfOpen={performanceMode}
@@ -352,6 +357,7 @@ export default function App() {
       )}
 
       <Tutorial open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
+      <WorkspaceProgress progress={library.exportProgress} />
     </div>
   );
 }

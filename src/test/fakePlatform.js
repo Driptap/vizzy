@@ -17,6 +17,7 @@ export function makeNodePlatform(root) {
       shaders: ensured('shaders'),
       models: ensured('models'),
       sprites: ensured('sprites'),
+      videos: ensured('videos'),
     },
     fs: {
       readText: (p) => fsp.readFile(p, 'utf8'),
@@ -41,6 +42,7 @@ export function makeNodePlatform(root) {
       }
     },
     pickFiles: async () => null,
+    saveFileDialog: async () => null,
     onFileDrop: () => () => {},
     ollama: {
       status: async () => ({ installed: false, running: false, managedPort: 11435, platform: 'test' }),

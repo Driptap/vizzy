@@ -54,6 +54,12 @@ export interface Platform {
    */
   pickFiles(extensions: string[]): Promise<string[] | null>;
   /**
+   * Native "save as" dialog. Returns the chosen absolute path, or null on
+   * cancel / when the host has no native dialog (plain browser). The dialog
+   * grants the renderer fs access to the returned path (same as pickFiles).
+   */
+  saveFileDialog(opts: { defaultName: string; extensions: string[] }): Promise<string | null>;
+  /**
    * Native file-drop subscription: the webview swallows DOM drop events and
    * reports absolute paths here instead. Returns an unsubscribe.
    */

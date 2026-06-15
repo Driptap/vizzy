@@ -15,6 +15,7 @@ import {
 } from '../lib/shaderLibrary';
 import { makeSpriteThumbnail } from '../lib/spriteLoader';
 import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS, VIDEO_EXTENSIONS } from '../lib/assetTypes';
+import { exportWorkspace, readWorkspaceFile, replaceWorkspace, type ExportProgress } from '../lib/workspaceIO';
 import { getPlatform } from '../platform';
 import { stageSource, resolveSourceRef } from '../lib/sourceStaging';
 import {
@@ -45,13 +46,23 @@ interface LibraryOptions {
   restoreSession: (session: SessionSnapshot, entries: LibraryEntry[]) => Promise<void>;
   loadSavedSession: () => Promise<SessionSnapshot | null>;
   markSessionReady: () => void;
+  suspendAutosave: () => void;
+  flushSession: () => Promise<void>;
+}
+
+// Default name offered in the "Save As" dialog: dated so successive exports
+// don't silently overwrite each other.
+function defaultWorkspaceName(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `vizzy-workspace-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.vizzy`;
 }
 
 export const isShaderEntry = (e: LibraryEntry): e is ShaderEntry => !e.kind;
 
 // The shader/deck/model/sprite library: list state, every library action, and
 // the boot sequence (first-run example seeding or session restore).
-export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, markSessionReady }: LibraryOptions) {
+export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, markSessionReady, suspendAutosave, flushSession }: LibraryOptions) {
   const {
     cueScene,
     prompts,
@@ -74,6 +85,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
 
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(() => getStored('libraryOpen') === '1');
+  // non-null while a Save As is in flight, drives the progress overlay
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
 
   const handleToggleLibrary = useCallback(() => {
     setLibraryOpen((prev) => {
@@ -366,6 +379,59 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
+  // Save As: bundle the whole workspace (library + assets + live session) into
+  // one portable `.vizzy` file at a user-chosen path. Flush the pending session
+  // autosave first so the bundle captures the live arrangement, not a stale one.
+  const handleExportWorkspace = useCallback(async () => {
+    const path = await getPlatform().saveFileDialog({
+      defaultName: defaultWorkspaceName(),
+      extensions: ['vizzy'],
+    });
+    if (!path) return; // cancelled
+    setExportProgress({ phase: 'reading', done: 0, total: 0 });
+    try {
+      await flushSession();
+      const { entries, assets } = await exportWorkspace(path, setExportProgress);
+      console.info(`[Vizzy] Exported workspace: ${entries} entries, ${assets} assets → ${path}`);
+    } catch (err) {
+      console.error('[Vizzy] Workspace export failed:', err);
+      window.alert(`Couldn't save workspace: ${(err as Error).message}`);
+    } finally {
+      setExportProgress(null);
+    }
+  }, [flushSession]);
+
+  // Open: replace the entire workspace from a `.vizzy` bundle, then reflect it
+  // in the running app. Destructive (clears the current library + session), so
+  // it confirms first. Autosave is gated across the swap exactly like boot, so
+  // a mid-restore snapshot can't clobber the just-imported session.
+  const handleImportWorkspace = useCallback(async () => {
+    const picked = await getPlatform().pickFiles(['vizzy']);
+    if (!picked?.length) return; // cancelled
+    try {
+      const bundle = await readWorkspaceFile(picked[0]);
+      const confirmed = window.confirm(
+        'Open this workspace? It replaces your current library and session on this computer — anything not already saved to a file will be lost.',
+      );
+      if (!confirmed) return;
+
+      suspendAutosave();
+      const entries = await replaceWorkspace(bundle);
+      setLibrary(entries);
+      if (bundle.manifest.session) {
+        await restoreSession(bundle.manifest.session, entries);
+      } else {
+        engineRef.current?.resetAllDecks();
+        perf.resetPerformance();
+      }
+      markSessionReady();
+    } catch (err) {
+      console.error('[Vizzy] Workspace import failed:', err);
+      window.alert(`Couldn't open workspace: ${(err as Error).message}`);
+      markSessionReady(); // never leave autosave wedged off
+    }
+  }, [suspendAutosave, restoreSession, markSessionReady, engineRef, perf]);
+
   // Boot: load the library; on first launch seed the example content, then
   // restore the previous session if there is one. A saved session always wins
   // over the example deck so reopening the app puts you back where you were —
@@ -425,5 +491,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleAssignDeck,
     handleDeleteEntry,
     handleRenameShader,
+    handleExportWorkspace,
+    handleImportWorkspace,
+    exportProgress,
   };
 }

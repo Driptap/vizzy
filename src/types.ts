@@ -363,3 +363,23 @@ export interface SessionSnapshot {
   beatBands?: BeatBandConfig[];
   slots: SessionSlot[];
 }
+
+// ---- portable workspace bundle (Save As / Open) ----
+
+/**
+ * A self-contained, machine-portable snapshot of the whole workspace: every
+ * library entry plus the live session. Asset bytes (models/sprites/videos)
+ * travel alongside this manifest in the `.vizzy` zip under `assets/<file>`,
+ * keyed by each AssetEntry's `file` field — so a bundle opened on another
+ * computer has no dangling references. Written/read by `lib/workspaceIO.ts`.
+ */
+export interface WorkspaceManifest {
+  /** discriminator so we reject arbitrary files picked in the Open dialog */
+  format: 'vizzy-workspace';
+  version: 1;
+  /** Unix ms when exported, for display/debugging only */
+  exportedAt: number;
+  library: LibraryEntry[];
+  /** the live arrangement at export time; null if there was none */
+  session: SessionSnapshot | null;
+}

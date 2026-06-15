@@ -39,3 +39,10 @@ export async function loadSession(): Promise<SessionSnapshot | null> {
     return null;
   }
 }
+
+// Drop session.json (used when importing a workspace bundle that carried no
+// session, so the next boot starts blank instead of restoring stale state).
+export async function clearSession(): Promise<void> {
+  const file = await sessionFile();
+  await getPlatform().fs.remove(file);
+}
