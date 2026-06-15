@@ -122,14 +122,18 @@ fn apply_loop_overrides(base: &mut Base, lp: &LoopState, phase: f32) {
 }
 
 /// Per-slot routed audio: amt scales all bands; the selected source drives
-/// `level` (the value AUT effects and flight scroll react to). `beat` is the
-/// already-shaped onset envelope, routable like a band.
-fn route_audio(bands: [f32; 4], beat: f32, band: &str, amt: f32) -> [f32; 4] {
+/// `level` (the value AUT effects and flight scroll react to). `beats` carries
+/// the already-shaped onset envelopes `[low, mid, high, combined]`, each
+/// routable like a band.
+fn route_audio(bands: [f32; 4], beats: [f32; 4], band: &str, amt: f32) -> [f32; 4] {
     let selected = match band {
         "low" => bands[0],
         "mid" => bands[1],
         "high" => bands[2],
-        "beat" => beat,
+        "beat" => beats[3],
+        "beat-low" => beats[0],
+        "beat-mid" => beats[1],
+        "beat-high" => beats[2],
         _ => bands[3], // unknown bands fall back to level, like `?? audio.level`
     };
     [
@@ -234,20 +238,21 @@ impl Evaluator {
     pub fn evaluate(
         &mut self,
         msg: &RenderStateMsg,
-        raw: [f32; 5],
+        raw: [f32; 8],
         t: f32,
         dt: f32,
     ) -> EvaluatedFrame {
         // The four continuous bands get gain then 0.15 lerp per frame; the zip
-        // stops at `smoothed`'s length (4), so raw[4] is left untouched here.
+        // stops at `smoothed`'s length (4), so raw[4..8] are left untouched here.
         for (s, &r) in self.smoothed.iter_mut().zip(raw.iter()) {
             let target = (r * AUDIO_GAIN).min(1.0);
             *s += (target - *s) * SMOOTHING;
         }
-        // The beat envelope is already shaped in audio.rs — pass it through with
-        // NO gain and NO lerp (the spiky impulse must not be smeared). This is
-        // the deliberate parity exception, mirrored in NativeAudioEngine.update.
-        let beat = raw[4];
+        // The beat envelopes [low, mid, high, combined] are already shaped in
+        // audio.rs — pass them through with NO gain and NO lerp (the spiky
+        // impulses must not be smeared). Deliberate parity exception, mirrored
+        // in NativeAudioEngine.update.
+        let beats = [raw[4], raw[5], raw[6], raw[7]];
 
         let aspect = if msg.aspect.is_finite() && msg.aspect > 0.0 {
             msg.aspect
@@ -264,7 +269,7 @@ impl Evaluator {
         let default_slot = SlotState::default();
         for i in 0..SLOT_COUNT {
             let s = msg.slots.get(i).unwrap_or(&default_slot);
-            let audio = route_audio(self.smoothed, beat, &s.band, s.amt);
+            let audio = route_audio(self.smoothed, beats, &s.band, s.amt);
             let level = audio[3];
 
             let mut base = Base::from_knobs(s);
@@ -670,7 +675,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let u = frame.slots[0].uniforms;
         assert!(close(u.mix, 0.25)); // 0.5 knob * 0.5 lane
         assert!(close(u.scale, 3.0)); // lane 1 -> top of 0.25..3
@@ -703,7 +708,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let u = frame.slots[0].uniforms;
         assert!(close(u.size[0], 1.0) && close(u.size[1], 1.0)); // 0.05..1 at v=1
         assert!(close(u.fx[0], PI)); // tilt -PI..PI
@@ -726,7 +731,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let frame = eval.evaluate(&slot_msg(model_slot.clone()), [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&slot_msg(model_slot.clone()), [0.0; 8], 0.0, 0.016);
         let u = frame.slots[0].uniforms;
         assert!(close(u.scale, 0.25));
         assert!(close(u.size[0], 0.05));
@@ -740,7 +745,7 @@ mod tests {
             .unwrap()
             .lanes
             .insert("posY".into(), flat_lane(1.0));
-        let frame = eval.evaluate(&slot_msg(model_slot), [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&slot_msg(model_slot), [0.0; 8], 0.0, 0.016);
         let DeckDraw::Model(m) = frame.slots[0].draw else {
             panic!("expected a model draw");
         };
@@ -761,11 +766,11 @@ mod tests {
             divider: 4.0,
             lanes: [("opacity".to_string(), flat_lane(0.0))].into(),
         });
-        let frame = eval.evaluate(&slot_msg(slot.clone()), [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&slot_msg(slot.clone()), [0.0; 8], 0.0, 0.016);
         assert!(close(frame.slots[0].uniforms.mix, 0.0));
 
         slot.loop_ = None;
-        let frame = eval.evaluate(&slot_msg(slot), [0.0; 5], 0.1, 0.016);
+        let frame = eval.evaluate(&slot_msg(slot), [0.0; 8], 0.1, 0.016);
         assert!(close(frame.slots[0].uniforms.mix, 0.5));
     }
 
@@ -788,10 +793,10 @@ mod tests {
         };
         let msg = slot_msg(slot);
         // t = 0.5s -> phase 0.25 -> contrast lerp(0, 2, 0.25) = 0.5
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.5, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.5, 0.016);
         assert!(close(frame.slots[0].uniforms.fx[1], 0.5));
         // t = 2.5s wraps -> phase 0.25 again
-        let frame = eval.evaluate(&msg, [0.0; 5], 2.5, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 2.5, 0.016);
         assert!(close(frame.slots[0].uniforms.fx[1], 0.5));
         // beats floor: blocks*divider = 0.0625 clamps to 0.125
         let mut eval = Evaluator::new();
@@ -809,7 +814,7 @@ mod tests {
             ..Default::default()
         };
         // 0.125 beats at 120bpm = 62.5ms loop; t = 31.25ms -> phase 0.5
-        let frame = eval.evaluate(&slot_msg(slot), [0.0; 5], 0.03125, 0.016);
+        let frame = eval.evaluate(&slot_msg(slot), [0.0; 8], 0.03125, 0.016);
         assert!(close(frame.slots[0].uniforms.fx[1], 1.0));
     }
 
@@ -818,44 +823,49 @@ mod tests {
     #[test]
     fn route_audio_scales_all_bands_and_band_drives_level() {
         let bands = [0.5, 0.2, 0.9, 0.4];
-        let high = route_audio(bands, 0.0, "high", 2.0);
+        let no_beat = [0.0; 4];
+        let high = route_audio(bands, no_beat, "high", 2.0);
         assert_eq!(high[0], 1.0); // low 0.5*2 clamped
         assert!(close(high[1], 0.4)); // mid 0.2*2
         assert_eq!(high[2], 1.0); // high 0.9*2 clamped
         assert_eq!(high[3], 1.0); // level <- high band, 0.9*2 clamped
 
-        let level = route_audio(bands, 0.0, "level", 0.5);
+        let level = route_audio(bands, no_beat, "level", 0.5);
         assert!(close(level[0], 0.25));
         assert!(close(level[3], 0.2)); // level band * 0.5
 
         // unknown band falls back to level, like `audio[band] ?? audio.level`
-        let odd = route_audio(bands, 0.0, "weird", 1.0);
+        let odd = route_audio(bands, no_beat, "weird", 1.0);
         assert!(close(odd[3], 0.4));
     }
 
     #[test]
-    fn route_audio_beat_selects_envelope() {
+    fn route_audio_beat_layers_select_envelopes() {
         let bands = [0.5, 0.2, 0.9, 0.4];
-        // 'beat' routes the onset envelope into level, scaled by amt and clamped.
-        let beat = route_audio(bands, 0.8, "beat", 1.0);
-        assert!(close(beat[3], 0.8));
-        let scaled = route_audio(bands, 0.8, "beat", 2.0);
-        assert_eq!(scaled[3], 1.0); // 0.8*2 clamped
-                                    // the three band channels are unaffected by the beat source
-        assert!(close(beat[0], 0.5));
-        assert!(close(beat[2], 0.9));
+        let beats = [0.3, 0.6, 0.9, 0.8]; // low, mid, high, combined
+                                          // Each layer (and the combined) routes its own envelope into level.
+        assert!(close(route_audio(bands, beats, "beat", 1.0)[3], 0.8));
+        assert!(close(route_audio(bands, beats, "beat-low", 1.0)[3], 0.3));
+        assert!(close(route_audio(bands, beats, "beat-mid", 1.0)[3], 0.6));
+        assert!(close(route_audio(bands, beats, "beat-high", 1.0)[3], 0.9));
+        // amt scales+clamps the routed level; the band channels carry the bands
+        // (scaled by amt), never the beat envelopes.
+        let scaled = route_audio(bands, beats, "beat-low", 2.0);
+        assert_eq!(scaled[3], 0.6); // beatLow 0.3*2
+        assert_eq!(scaled[0], 1.0); // low band 0.5*2 clamped
+        assert!(close(scaled[1], 0.4)); // mid band 0.2*2
     }
 
     #[test]
     fn beat_envelope_is_not_lerp_smoothed() {
         let mut eval = Evaluator::new();
         let mut slot = SlotState::default();
-        slot.band = "beat".into();
+        slot.band = "beat-low".into();
         slot.amt = 1.0;
         let msg = slot_msg(slot);
-        // A one-shot full beat reaches level immediately — no gain, no ramp —
-        // unlike the continuous bands (see audio_smoothing_applies_gain...).
-        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.0, 1.0], 0.0, 0.016);
+        // A one-shot full beat (raw[4] = beatLow) reaches level immediately — no
+        // gain, no ramp — unlike the continuous bands (see audio_smoothing...).
+        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 0.0, 0.016);
         assert!(close(frame.slots[0].uniforms.audio[3], 1.0));
     }
 
@@ -863,14 +873,14 @@ mod tests {
     fn audio_smoothing_applies_gain_then_per_frame_lerp() {
         let mut eval = Evaluator::new();
         let msg = slot_msg(SlotState::default()); // band level, amt 1
-        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.5, 0.0], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0], 0.0, 0.016);
         // target = min(1, 0.5*1.4) = 0.7; first lerp step = 0.7*0.15
         assert!(close(frame.slots[0].uniforms.audio[3], 0.7 * 0.15));
-        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.5, 0.0], 0.016, 0.016);
+        let frame = eval.evaluate(&msg, [0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0], 0.016, 0.016);
         let expect = 0.105 + (0.7 - 0.105) * 0.15;
         assert!(close(frame.slots[0].uniforms.audio[3], expect));
         // capture stopped -> zeros decay through the lerp
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.032, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.032, 0.016);
         assert!(close(frame.slots[0].uniforms.audio[3], expect * 0.85));
     }
 
@@ -892,7 +902,7 @@ mod tests {
             layer: 2.0,
             ..Default::default()
         });
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let u = frame.slots[0].uniforms;
         assert!(close(u.mix, 0.8));
         assert!(close(u.scale, 1.5)); // no AUT -> base
@@ -918,9 +928,9 @@ mod tests {
         };
         let msg = slot_msg(slot);
         // shader composite: spin = sum(dt * 1.6) at t=0 LFO phases
-        let frame1 = eval.evaluate(&msg, [0.0; 5], 0.0, 0.025);
+        let frame1 = eval.evaluate(&msg, [0.0; 8], 0.0, 0.025);
         assert!(close(frame1.slots[0].uniforms.fx[0], 0.025 * 1.6));
-        let frame2 = eval.evaluate(&msg, [0.0; 5], 0.0, 0.025);
+        let frame2 = eval.evaluate(&msg, [0.0; 8], 0.0, 0.025);
         assert!(close(frame2.slots[0].uniforms.fx[0], 0.05 * 1.6));
         // SCL pulses the composite scale at t=0: 1 + 0.4*0.5 = 1.2
         assert!(close(frame2.slots[0].uniforms.scale, 1.4 * 1.2));
@@ -930,7 +940,7 @@ mod tests {
         // the same AUT on a model deck pins the composite (no zoom, no warp)
         let mut eval = Evaluator::new();
         eval.set_content(0, ContentAnim::Model { spin: 0.0 });
-        let frame = eval.evaluate(&msg, [0.0; 5], 1.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 1.0, 0.016);
         assert!(close(frame.slots[0].uniforms.scale, 1.4));
         assert_eq!(frame.slots[0].uniforms.warp, [0.0, 0.0]);
     }
@@ -951,8 +961,8 @@ mod tests {
             ..Default::default()
         };
         // two ticks at t=0: ry = 2 * dt * 1.6; rx = rot.amt*sin(0)*0.2 = 0
-        eval.evaluate(&msg, [0.0; 5], 0.0, 0.5);
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.5);
+        eval.evaluate(&msg, [0.0; 8], 0.0, 0.5);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.5);
         let DeckDraw::Model(m) = frame.slots[2].draw else {
             panic!("expected a model draw");
         };
@@ -983,7 +993,7 @@ mod tests {
             slots: vec![SlotState::default(), SlotState::default()],
             ..Default::default()
         };
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let DeckDraw::Sprite(s) = frame.slots[1].draw else {
             panic!("expected a sprite draw");
         };
@@ -1003,7 +1013,7 @@ mod tests {
                 spin: std::f32::consts::FRAC_PI_2,
             },
         );
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.0);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.0);
         let DeckDraw::Sprite(s) = frame.slots[1].draw else {
             panic!("expected a sprite draw");
         };
@@ -1020,7 +1030,7 @@ mod tests {
                 spin: 0.0,
             },
         );
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let DeckDraw::Sprite(s) = frame.slots[1].draw else {
             panic!("expected a sprite draw");
         };
@@ -1042,7 +1052,7 @@ mod tests {
             },
         );
         let msg = slot_msg(SlotState::default());
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.5);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.5);
         let DeckDraw::Flight(f) = frame.slots[0].draw else {
             panic!("expected a flight draw");
         };
@@ -1067,10 +1077,10 @@ mod tests {
         );
         // saturate the smoother so level == 1
         for _ in 0..200 {
-            eval.evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0], 0.0, 0.016);
+            eval.evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], 0.0, 0.016);
         }
         let before = match eval
-            .evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0], 0.0, 0.0)
+            .evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], 0.0, 0.0)
             .slots[0]
             .draw
         {
@@ -1078,7 +1088,7 @@ mod tests {
             _ => panic!(),
         };
         let after = match eval
-            .evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0], 0.0, 0.5)
+            .evaluate(&msg, [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0], 0.0, 0.5)
             .slots[0]
             .draw
         {
@@ -1106,7 +1116,7 @@ mod tests {
             pos_y: -5.0,
             ..Default::default()
         });
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let DeckDraw::Flight(f) = frame.slots[0].draw else {
             panic!("expected a flight draw");
         };
@@ -1138,7 +1148,7 @@ mod tests {
             ..Default::default()
         });
         // level 0 (audio-coupled, silence) -> roll 0; bobs at t=0 are 0
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.016);
         let DeckDraw::Flight(f) = frame.slots[0].draw else {
             panic!("expected a flight draw");
         };
@@ -1167,7 +1177,7 @@ mod tests {
         let mut varied = false;
         let mut last = None;
         for i in 0..32 {
-            let frame = eval.evaluate(&msg, [0.0; 5], i as f32 * 0.016, 0.016);
+            let frame = eval.evaluate(&msg, [0.0; 8], i as f32 * 0.016, 0.016);
             let DeckDraw::Sprite(s) = frame.slots[0].draw else {
                 panic!("expected a sprite draw");
             };
@@ -1185,7 +1195,7 @@ mod tests {
         eval.set_content(0, ContentAnim::Model { spin: 0.0 });
         let mut hidden = 0;
         for i in 0..400 {
-            let frame = eval.evaluate(&msg, [0.0; 5], i as f32 * 0.016, 0.016);
+            let frame = eval.evaluate(&msg, [0.0; 8], i as f32 * 0.016, 0.016);
             let DeckDraw::Model(m) = frame.slots[0].draw else {
                 panic!("expected a model draw");
             };
@@ -1212,7 +1222,7 @@ mod tests {
             },
         );
         let msg = slot_msg(SlotState::default());
-        eval.evaluate(&msg, [0.0; 5], 0.0, 0.5);
+        eval.evaluate(&msg, [0.0; 8], 0.0, 0.5);
         // re-staging hands the evaluator a fresh accumulator
         eval.set_content(
             0,
@@ -1223,7 +1233,7 @@ mod tests {
                 scroll: 0.0,
             },
         );
-        let frame = eval.evaluate(&msg, [0.0; 5], 0.0, 0.0);
+        let frame = eval.evaluate(&msg, [0.0; 8], 0.0, 0.0);
         let DeckDraw::Flight(f) = frame.slots[0].draw else {
             panic!("expected a flight draw");
         };
@@ -1234,7 +1244,7 @@ mod tests {
     fn missing_slots_evaluate_as_default_state() {
         let mut eval = Evaluator::new();
         let msg = RenderStateMsg::default(); // no slots at all
-        let frame = eval.evaluate(&msg, [0.0; 5], 1.0, 0.016);
+        let frame = eval.evaluate(&msg, [0.0; 8], 1.0, 0.016);
         for slot in &frame.slots {
             assert_eq!(slot.uniforms, Slot::default());
             assert_eq!(slot.draw, DeckDraw::Shader);
@@ -1245,7 +1255,7 @@ mod tests {
             ..Default::default()
         };
         assert!(close(
-            eval.evaluate(&msg, [0.0; 5], 0.0, 0.016).aspect,
+            eval.evaluate(&msg, [0.0; 8], 0.0, 0.016).aspect,
             FALLBACK_ASPECT
         ));
     }

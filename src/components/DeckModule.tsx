@@ -62,12 +62,15 @@ const AUT_EFFECTS: { key: AutEffectKey; label: string; title: string }[] = [
   { key: 'skw', label: 'SKW', title: 'Skew' },
 ];
 
-const BANDS: { id: AudioBand; label: string }[] = [
-  { id: 'low', label: 'LO' },
-  { id: 'mid', label: 'MID' },
-  { id: 'high', label: 'HI' },
-  { id: 'level', label: 'LVL' },
-  { id: 'beat', label: 'BEAT' },
+const BANDS: { id: AudioBand; label: string; title: string }[] = [
+  { id: 'low', label: 'LO', title: 'Low band (bass)' },
+  { id: 'mid', label: 'MID', title: 'Mid band' },
+  { id: 'high', label: 'HI', title: 'High band (treble)' },
+  { id: 'level', label: 'LVL', title: 'Full-spectrum level' },
+  { id: 'beat', label: 'BEAT', title: 'Combined beat (enabled layers)' },
+  { id: 'beat-low', label: 'KICK', title: 'Kick layer (low-band beat)' },
+  { id: 'beat-mid', label: 'SNR', title: 'Snare layer (mid-band beat)' },
+  { id: 'beat-high', label: 'HAT', title: 'Hat layer (high-band beat)' },
 ];
 
 interface DeckModuleProps {
@@ -411,13 +414,13 @@ export function DeckModule({
         {effectiveTab === 'AUDIO' && (
           <>
             <div className="flex flex-col items-center gap-1">
-              <div className="flex overflow-hidden rounded border border-neutral-700">
+              <div className="grid grid-cols-4 overflow-hidden rounded border border-neutral-700">
                 {BANDS.map((band) => (
                   <button
                     key={band.id}
                     type="button"
                     onClick={() => onFxChange(index, 'band', band.id)}
-                    title={`Drive this channel's u_audio_level from the ${band.label} band`}
+                    title={`Drive this channel's u_audio_level from: ${band.title}`}
                     className={`px-1.5 py-1 text-[8px] font-bold transition-colors ${
                       fx.band === band.id
                         ? 'bg-cyan-600 text-white'

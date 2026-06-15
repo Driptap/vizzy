@@ -48,12 +48,12 @@ export default function App() {
   const [meterPanelOpen, setMeterPanelOpen] = useState(false);
   const toggleMeterPanel = useCallback(() => setMeterPanelOpen((v) => !v), []);
 
-  // Push beat-detector tuning to the native core whenever it changes or capture
-  // (re)starts — so restored sensitivity/decay take effect on the next session.
+  // Push per-layer beat-detector tuning to the native core whenever it changes
+  // or capture (re)starts — so restored settings take effect on the next session.
   useEffect(() => {
     if (!audio.audioActive) return;
-    void audioRef.current?.setBeatConfig(perf.beatSensitivity, perf.beatDecay);
-  }, [audioRef, audio.audioActive, perf.beatSensitivity, perf.beatDecay]);
+    void audioRef.current?.setBeatConfig(perf.beatBands);
+  }, [audioRef, audio.audioActive, perf.beatBands]);
 
   // Texture sharing (Syphon/Spout) lives in the render core; mirror state here.
   const [syphonOn, setSyphonOn] = useState(false);
@@ -184,10 +184,8 @@ export default function App() {
           fx={perf.fx}
           bpmSync={perf.bpmSync}
           onToggleBpmSync={perf.applyBpmSync}
-          beatSensitivity={perf.beatSensitivity}
-          beatDecay={perf.beatDecay}
-          onSensitivityChange={perf.applyBeatSensitivity}
-          onDecayChange={perf.applyBeatDecay}
+          beatBands={perf.beatBands}
+          onBeatBandChange={perf.applyBeatBand}
         />
       )}
 

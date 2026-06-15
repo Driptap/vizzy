@@ -12,8 +12,12 @@ export interface AudioMeters {
   mid: number;
   high: number;
   level: number;
-  /** onset envelope 0..1 (snaps to 1 on a beat, decays) */
+  /** combined onset envelope 0..1 (max of enabled layers) */
   beat: number;
+  /** per-layer onset envelopes 0..1 (kick / snare / hat) */
+  beatLow: number;
+  beatMid: number;
+  beatHigh: number;
   /** detected tempo in BPM; 0 until enough onsets */
   bpm: number;
   bpmStable: boolean;
@@ -27,6 +31,9 @@ const ZERO: AudioMeters = {
   high: 0,
   level: 0,
   beat: 0,
+  beatLow: 0,
+  beatMid: 0,
+  beatHigh: 0,
   bpm: 0,
   bpmStable: false,
   deckLevels: [],
@@ -43,6 +50,12 @@ function bandValue(m: AudioLevels, band: AudioBand): number {
       return m.high;
     case 'beat':
       return m.beat;
+    case 'beat-low':
+      return m.beatLow;
+    case 'beat-mid':
+      return m.beatMid;
+    case 'beat-high':
+      return m.beatHigh;
     default:
       return m.level;
   }
@@ -93,6 +106,9 @@ export function useAudioMeters(
         high: m.high,
         level: m.level,
         beat: m.beat,
+        beatLow: m.beatLow,
+        beatMid: m.beatMid,
+        beatHigh: m.beatHigh,
         bpm: m.bpm,
         bpmStable: m.bpmStable,
         deckLevels,

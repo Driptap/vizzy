@@ -94,7 +94,16 @@ export const PALETTE_PRESETS = [
   'mono-amber',
 ] as const;
 
-const AUDIO_BANDS: AudioBand[] = ['low', 'mid', 'high', 'level', 'beat'];
+const AUDIO_BANDS: AudioBand[] = [
+  'low',
+  'mid',
+  'high',
+  'level',
+  'beat',
+  'beat-low',
+  'beat-mid',
+  'beat-high',
+];
 const AUDIO_TARGETS = ['scale', 'brightness', 'speed'] as const;
 
 const num = (v: unknown): number | undefined =>

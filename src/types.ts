@@ -15,18 +15,45 @@ export interface DeckUiState {
 }
 
 export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape' | 'scene';
-export type AudioBand = 'low' | 'mid' | 'high' | 'level' | 'beat';
+export type AudioBand =
+  | 'low'
+  | 'mid'
+  | 'high'
+  | 'level'
+  | 'beat'
+  | 'beat-low'
+  | 'beat-mid'
+  | 'beat-high';
 export interface AudioLevels {
   low: number;
   mid: number;
   high: number;
   level: number;
-  /** Onset envelope 0..1 — snaps to 1 on a detected beat, decays. Not smoothed. */
+  /** Combined onset envelope 0..1 (max of enabled layers). Not smoothed. */
   beat: number;
+  /** Per-layer onset envelopes 0..1 (kick / snare / hat). */
+  beatLow: number;
+  beatMid: number;
+  beatHigh: number;
   /** Detected tempo in BPM; 0 until enough onsets accumulate. */
   bpm: number;
   /** True when the recent inter-onset intervals are consistent enough to trust. */
   bpmStable: boolean;
+}
+
+/** One beat-detection layer's live tuning (kick / snare / hat). */
+export interface BeatBandConfig {
+  /** feeds the combined `beat`? (the layer's own envelope is always produced) */
+  enabled: boolean;
+  /** onset-threshold multiplier 0.5..3 (higher = fewer beats) */
+  sensitivity: number;
+  /** envelope fall per tick 0.02..0.5 (higher = tighter flash) */
+  decay: number;
+  /** minimum gap between this layer's beats, ms 60..500 (higher = calmer) */
+  gapMs: number;
+  /** detection band low/high bound, Hz */
+  fromHz: number;
+  toHz: number;
 }
 
 export interface ChannelFx {
@@ -292,9 +319,7 @@ export interface SessionSnapshot {
   bpm?: number;
   /** when true, the detected tempo drives `bpm` */
   bpmSync?: boolean;
-  /** beat-detector onset sensitivity (0.5..3) */
-  beatSensitivity?: number;
-  /** beat-envelope decay per tick (0.02..0.5) */
-  beatDecay?: number;
+  /** per-layer beat-detector tuning [low, mid, high] */
+  beatBands?: BeatBandConfig[];
   slots: SessionSlot[];
 }

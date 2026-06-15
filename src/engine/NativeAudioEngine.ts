@@ -4,7 +4,7 @@
 // respond identically on both hosts.
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AudioLevels } from '../types';
+import type { AudioLevels, BeatBandConfig } from '../types';
 
 const SMOOTHING = 0.15; // matches AudioEngine — lerp factor per frame
 
@@ -19,6 +19,9 @@ const zero = (): AudioLevels => ({
   high: 0,
   level: 0,
   beat: 0,
+  beatLow: 0,
+  beatMid: 0,
+  beatHigh: 0,
   bpm: 0,
   bpmStable: false,
 });
@@ -58,10 +61,11 @@ export class NativeAudioEngine {
     this.raw = zero();
   }
 
-  // Live-tune the native beat detector (sensitivity scales the onset threshold,
-  // decay sets how fast the beat envelope falls). Safe whether or not running.
-  async setBeatConfig(sensitivity: number, decay: number): Promise<void> {
-    await invoke('audio_set_beat_config', { sensitivity, decay }).catch(() => {});
+  // Live-tune the native beat detector — one config per layer [low, mid, high]
+  // (enable, sensitivity, decay, min-gap, frequency range). Safe whether or not
+  // capture is running; the analysis loop reads it every tick.
+  async setBeatConfig(bands: BeatBandConfig[]): Promise<void> {
+    await invoke('audio_set_beat_config', { config: { bands } }).catch(() => {});
   }
 
   async listDevices(): Promise<MediaDeviceInfo[]> {
@@ -93,10 +97,13 @@ export class NativeAudioEngine {
     s.mid += (target.mid - s.mid) * SMOOTHING;
     s.high += (target.high - s.high) * SMOOTHING;
     s.level += (target.level - s.level) * SMOOTHING;
-    // Beat is already shaped in audio.rs: pass it through with NO gain and NO
-    // lerp, mirroring the render evaluator (evaluate.rs). bpm/stable likewise
-    // ride straight through for the meters and BPM-sync path.
+    // Beat envelopes are already shaped in audio.rs: pass them through with NO
+    // gain and NO lerp, mirroring the render evaluator (evaluate.rs). bpm/stable
+    // likewise ride straight through for the meters and BPM-sync path.
     s.beat = this.running ? this.raw.beat : 0;
+    s.beatLow = this.running ? this.raw.beatLow : 0;
+    s.beatMid = this.running ? this.raw.beatMid : 0;
+    s.beatHigh = this.running ? this.raw.beatHigh : 0;
     s.bpm = this.running ? this.raw.bpm : 0;
     s.bpmStable = this.running ? this.raw.bpmStable : false;
     return s;

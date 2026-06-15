@@ -63,6 +63,9 @@ vi.mock('./engine/NativeAudioEngine', () => {
         high: 0,
         level: 0,
         beat: 0,
+        beatLow: 0,
+        beatMid: 0,
+        beatHigh: 0,
         bpm: 0,
         bpmStable: false,
       }));

@@ -25,7 +25,6 @@ const BAND_LEVEL: (f32, f32) = (20.0, 16000.0);
 // Beat detection (multi-band spectral flux). Tuned for the 16 ms analysis tick.
 const FLUX_WINDOW: usize = 43; // ~0.7 s of flux history for the adaptive median
 const FLUX_FLOOR: f32 = 0.008; // absolute floor so near-silence can't trigger
-const ONSET_DEBOUNCE_MS: f64 = 110.0; // ignore retriggers within one transient
 const IOI_MIN_S: f32 = 0.27; // 220 BPM — fastest accepted inter-onset interval
 const IOI_MAX_S: f32 = 1.5; //  40 BPM — slowest accepted inter-onset interval
 const IOI_HISTORY: usize = 8; // inter-onset intervals kept for the tempo estimate
@@ -44,26 +43,68 @@ pub struct AudioDevice {
     pub label: String,
 }
 
-/// Raw audio drivers shared with the render thread: `[low, mid, high, level,
-/// beat]`. The first four are band averages 0..1 — the render thread applies
-/// the 1.4 gain and per-frame 0.15 lerp itself. `beat` (index 4) is the already
-/// shaped onset envelope and is passed through **un-smoothed** on both sides.
-pub type RawLevels = Arc<Mutex<[f32; 5]>>;
+/// Raw audio drivers shared with the render thread:
+/// `[low, mid, high, level, beatLow, beatMid, beatHigh, beatCombined]`. The
+/// first four are band averages 0..1 — the render thread applies the 1.4 gain
+/// and per-frame 0.15 lerp itself. Indices 4..8 are already-shaped onset
+/// envelopes (the three layers + their combined max), passed through
+/// **un-smoothed** on both sides.
+pub type RawLevels = Arc<Mutex<[f32; 8]>>;
 
-/// Beat-detector tuning, mutated live from the UI via `audio_set_beat_config`.
+/// Per-layer beat-detector tuning. Each of the three layers (kick/snare/hat)
+/// detects independently; `enabled` only decides whether it feeds the combined
+/// `beat` — the layer's own envelope is always produced for direct routing.
 #[derive(Clone, Copy)]
-pub struct BeatConfig {
+pub struct BandBeatConfig {
+    pub enabled: bool,
     /// Scales the adaptive onset threshold (higher = fewer beats). 0.5..3.0.
     pub sensitivity: f32,
-    /// Per-tick fall of the beat envelope (higher = tighter flash). 0.02..0.5.
+    /// Per-tick fall of this layer's envelope (higher = tighter flash). 0.02..0.5.
     pub decay: f32,
+    /// Minimum gap between this layer's beats, ms (higher = calmer). 60..500.
+    pub gate_ms: f32,
+    /// Adjustable detection band, Hz.
+    pub from_hz: f32,
+    pub to_hz: f32,
+}
+
+/// Live beat-detector tuning: one config per layer [low, mid, high].
+#[derive(Clone, Copy)]
+pub struct BeatConfig {
+    pub bands: [BandBeatConfig; 3],
 }
 
 impl Default for BeatConfig {
     fn default() -> Self {
+        // Calm out of the box: only the kick feeds the combined beat; the
+        // higher layers are stricter and off-by-default for the combined.
         Self {
-            sensitivity: 1.4,
-            decay: 0.12,
+            bands: [
+                BandBeatConfig {
+                    enabled: true,
+                    sensitivity: 1.3,
+                    decay: 0.12,
+                    gate_ms: 120.0,
+                    from_hz: 30.0,
+                    to_hz: 150.0,
+                },
+                BandBeatConfig {
+                    enabled: false,
+                    sensitivity: 1.6,
+                    decay: 0.14,
+                    gate_ms: 110.0,
+                    from_hz: 200.0,
+                    to_hz: 2000.0,
+                },
+                BandBeatConfig {
+                    enabled: false,
+                    sensitivity: 1.9,
+                    decay: 0.10,
+                    gate_ms: 80.0,
+                    from_hz: 3000.0,
+                    to_hz: 8000.0,
+                },
+            ],
         }
     }
 }
@@ -78,16 +119,23 @@ impl BeatConfig {
 /// Shared handle to the live beat config.
 pub type BeatCfg = Arc<Mutex<BeatConfig>>;
 
-/// Raw band averages 0..1 plus beat/tempo — emitted to the webview for the UI
-/// meters and the BPM-sync path.
+/// Raw band averages 0..1 plus per-layer beat envelopes and tempo — emitted to
+/// the webview for the UI meters and the BPM-sync path.
 #[derive(serde::Serialize, Clone)]
 struct AudioLevels {
     low: f32,
     mid: f32,
     high: f32,
     level: f32,
-    /// Onset envelope 0..1 (snaps to 1 on a beat, decays). Not smoothed downstream.
+    /// Combined onset envelope (max of the enabled layers). Not smoothed downstream.
     beat: f32,
+    /// Per-layer onset envelopes 0..1 (kick / snare / hat).
+    #[serde(rename = "beatLow")]
+    beat_low: f32,
+    #[serde(rename = "beatMid")]
+    beat_mid: f32,
+    #[serde(rename = "beatHigh")]
+    beat_high: f32,
     /// Detected tempo; 0 until enough onsets have accumulated.
     bpm: f32,
     /// True when the recent inter-onset intervals are consistent enough to trust.
@@ -95,103 +143,105 @@ struct AudioLevels {
     bpm_stable: bool,
 }
 
-/// Per-band spectral-flux onset detector with an inter-onset-interval tempo
-/// estimate. Lives on the analysis thread; one instance per capture session.
-struct BeatDetector {
-    prev_bins: [f32; NUM_BINS],
-    /// Recent normalized flux per detection band (low, mid, high).
-    flux_hist: [VecDeque<f32>; 3],
-    prev_flux: [f32; 3],
+/// One layer's spectral-flux onset state.
+struct BandDetector {
+    prev_flux: f32,
+    flux_hist: VecDeque<f32>,
     envelope: f32,
     last_onset_ms: f64,
-    /// Inter-onset intervals in seconds, newest last.
+}
+
+impl BandDetector {
+    fn new() -> Self {
+        Self {
+            prev_flux: 0.0,
+            flux_hist: VecDeque::new(),
+            envelope: 0.0,
+            last_onset_ms: 0.0,
+        }
+    }
+}
+
+/// Three independent per-layer onset detectors plus an inter-onset-interval
+/// tempo estimate (driven by the low layer). One instance per capture session.
+struct BeatDetector {
+    prev_bins: [f32; NUM_BINS],
+    bands: [BandDetector; 3],
+    /// Inter-onset intervals in seconds (from the low layer), newest last.
     ioi: VecDeque<f32>,
     bpm: f32,
+    /// Combined envelope = max of the enabled layers, recomputed each tick.
+    combined: f32,
 }
 
 impl BeatDetector {
     fn new() -> Self {
         Self {
             prev_bins: [0.0; NUM_BINS],
-            flux_hist: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
-            prev_flux: [0.0; 3],
-            envelope: 0.0,
-            last_onset_ms: 0.0,
+            bands: [
+                BandDetector::new(),
+                BandDetector::new(),
+                BandDetector::new(),
+            ],
             ioi: VecDeque::new(),
             bpm: 0.0,
+            combined: 0.0,
         }
     }
 
     /// Advance one analysis tick. `now_ms` is the elapsed capture time.
     fn process(&mut self, bins: &[f32; NUM_BINS], sample_rate: u32, cfg: &BeatConfig, now_ms: f64) {
-        let ranges = [
-            band_range(sample_rate, BAND_LOW.0, BAND_LOW.1),
-            band_range(sample_rate, BAND_MID.0, BAND_MID.1),
-            band_range(sample_rate, BAND_HIGH.0, BAND_HIGH.1),
-        ];
+        let mut combined = 0.0f32;
+        for (b, det) in self.bands.iter_mut().enumerate() {
+            let bc = cfg.bands[b];
+            let (start, end) = band_range(sample_rate, bc.from_hz, bc.to_hz);
 
-        // Positive spectral flux per band, normalized by bin count so the bands
-        // (and a single threshold floor) are comparable despite differing widths.
-        let mut onset = false;
-        for (b, &(start, end)) in ranges.iter().enumerate() {
-            let mut sum = 0.0f32;
-            for (cur, prev) in bins[start..=end].iter().zip(&self.prev_bins[start..=end]) {
-                let d = cur - prev;
-                if d > 0.0 {
-                    sum += d;
+            // Positive spectral flux over this layer's (live-tunable) band,
+            // normalized by bin count so a single threshold floor fits any width.
+            let mut flux = 0.0f32;
+            if start <= end {
+                let mut sum = 0.0f32;
+                for (cur, prev) in bins[start..=end].iter().zip(&self.prev_bins[start..=end]) {
+                    let d = cur - prev;
+                    if d > 0.0 {
+                        sum += d;
+                    }
                 }
+                flux = sum / (end - start + 1) as f32;
             }
-            let flux = sum / (end - start + 1).max(1) as f32;
-            let threshold = median(&self.flux_hist[b]) * cfg.sensitivity + FLUX_FLOOR;
-            // A rising flux above the adaptive threshold is an onset in this band.
-            if flux > threshold && flux > self.prev_flux[b] {
-                onset = true;
+            let threshold = median(&det.flux_hist) * bc.sensitivity + FLUX_FLOOR;
+            let onset = flux > threshold && flux > det.prev_flux;
+            det.prev_flux = flux;
+            det.flux_hist.push_back(flux);
+            if det.flux_hist.len() > FLUX_WINDOW {
+                det.flux_hist.pop_front();
             }
-            self.prev_flux[b] = flux;
-            self.flux_hist[b].push_back(flux);
-            if self.flux_hist[b].len() > FLUX_WINDOW {
-                self.flux_hist[b].pop_front();
+
+            // Envelope decays every tick; an accepted onset (past this layer's
+            // gate) snaps it back to 1.
+            det.envelope = (det.envelope - bc.decay).max(0.0);
+            if onset && now_ms - det.last_onset_ms > bc.gate_ms as f64 {
+                // Tempo comes from the low layer (kick = the beat anchor).
+                if b == 0 && det.last_onset_ms > 0.0 {
+                    let ioi = ((now_ms - det.last_onset_ms) / 1000.0) as f32;
+                    if (IOI_MIN_S..=IOI_MAX_S).contains(&ioi) {
+                        self.ioi.push_back(ioi);
+                        if self.ioi.len() > IOI_HISTORY {
+                            self.ioi.pop_front();
+                        }
+                        update_bpm(&mut self.bpm, &self.ioi);
+                    }
+                }
+                det.last_onset_ms = now_ms;
+                det.envelope = 1.0;
+            }
+
+            if bc.enabled {
+                combined = combined.max(det.envelope);
             }
         }
         self.prev_bins.copy_from_slice(bins);
-
-        // Envelope decays every tick; an accepted onset snaps it back to 1.
-        self.envelope = (self.envelope - cfg.decay).max(0.0);
-        if onset && now_ms - self.last_onset_ms > ONSET_DEBOUNCE_MS {
-            if self.last_onset_ms > 0.0 {
-                let ioi = ((now_ms - self.last_onset_ms) / 1000.0) as f32;
-                if (IOI_MIN_S..=IOI_MAX_S).contains(&ioi) {
-                    self.ioi.push_back(ioi);
-                    if self.ioi.len() > IOI_HISTORY {
-                        self.ioi.pop_front();
-                    }
-                    self.update_bpm();
-                }
-            }
-            self.last_onset_ms = now_ms;
-            self.envelope = 1.0;
-        }
-    }
-
-    /// Re-estimate tempo from the median inter-onset interval, octave-folded into
-    /// a musical range and smoothed to damp jitter.
-    fn update_bpm(&mut self) {
-        let med = median(&self.ioi);
-        if med <= 0.0 {
-            return;
-        }
-        let mut candidate = 60.0 / med;
-        while candidate < BPM_FOLD_LO {
-            candidate *= 2.0;
-        }
-        while candidate >= BPM_FOLD_HI {
-            candidate /= 2.0;
-        }
-        if self.bpm <= 0.0 {
-            self.bpm = candidate;
-        } else {
-            self.bpm += (candidate - self.bpm) * 0.1;
-        }
+        self.combined = combined;
     }
 
     /// Tempo is trustworthy once several recent intervals agree closely.
@@ -210,6 +260,27 @@ impl BeatDetector {
             .sum::<f32>()
             / self.ioi.len() as f32;
         var.sqrt() / mean < 0.1
+    }
+}
+
+/// Re-estimate tempo from the median inter-onset interval, octave-folded into a
+/// musical range and smoothed to damp jitter.
+fn update_bpm(bpm: &mut f32, ioi: &VecDeque<f32>) {
+    let med = median(ioi);
+    if med <= 0.0 {
+        return;
+    }
+    let mut candidate = 60.0 / med;
+    while candidate < BPM_FOLD_LO {
+        candidate *= 2.0;
+    }
+    while candidate >= BPM_FOLD_HI {
+        candidate /= 2.0;
+    }
+    if *bpm <= 0.0 {
+        *bpm = candidate;
+    } else {
+        *bpm += (candidate - *bpm) * 0.1;
     }
 }
 
@@ -296,7 +367,7 @@ impl AudioState {
             let _ = capture.stream_thread.join();
             let _ = capture.analysis_thread.join();
         }
-        *lock_ignore_poison(&self.raw) = [0.0; 5];
+        *lock_ignore_poison(&self.raw) = [0.0; 8];
     }
 }
 
@@ -377,13 +448,42 @@ pub fn audio_stop(state: tauri::State<'_, AudioState>) {
     state.stop();
 }
 
+/// One layer's tuning as sent from the UI (camelCase over IPC).
+#[derive(serde::Deserialize)]
+pub struct BandBeatConfigArg {
+    enabled: bool,
+    sensitivity: f32,
+    decay: f32,
+    #[serde(rename = "gapMs")]
+    gap_ms: f32,
+    #[serde(rename = "fromHz")]
+    from_hz: f32,
+    #[serde(rename = "toHz")]
+    to_hz: f32,
+}
+
+/// Full per-layer beat config from the UI: [low, mid, high].
+#[derive(serde::Deserialize)]
+pub struct BeatConfigArg {
+    bands: [BandBeatConfigArg; 3],
+}
+
 /// Live-tune the beat detector. Safe to call whether or not capture is running;
-/// the analysis loop reads this every tick.
+/// the analysis loop reads this every tick. Each field is clamped to its range.
 #[tauri::command]
-pub fn audio_set_beat_config(state: tauri::State<'_, AudioState>, sensitivity: f32, decay: f32) {
+pub fn audio_set_beat_config(state: tauri::State<'_, AudioState>, config: BeatConfigArg) {
     let mut cfg = lock_ignore_poison(&state.beat_config);
-    cfg.sensitivity = sensitivity.clamp(0.5, 3.0);
-    cfg.decay = decay.clamp(0.02, 0.5);
+    for (dst, src) in cfg.bands.iter_mut().zip(config.bands.iter()) {
+        dst.enabled = src.enabled;
+        dst.sensitivity = src.sensitivity.clamp(0.5, 3.0);
+        dst.decay = src.decay.clamp(0.02, 0.5);
+        dst.gate_ms = src.gap_ms.clamp(60.0, 500.0);
+        // Keep a sane, non-empty band (≥10 Hz wide) whatever the UI sends.
+        let from = src.from_hz.clamp(20.0, 16000.0);
+        let to = src.to_hz.clamp(from + 10.0, 16000.0);
+        dst.from_hz = from;
+        dst.to_hz = to;
+    }
 }
 
 fn run_stream_thread(
@@ -640,7 +740,10 @@ fn run_analysis_loop(
             mid: band_average(&bins, sample_rate, BAND_MID.0, BAND_MID.1),
             high: band_average(&bins, sample_rate, BAND_HIGH.0, BAND_HIGH.1),
             level: band_average(&bins, sample_rate, BAND_LEVEL.0, BAND_LEVEL.1),
-            beat: detector.envelope,
+            beat: detector.combined,
+            beat_low: detector.bands[0].envelope,
+            beat_mid: detector.bands[1].envelope,
+            beat_high: detector.bands[2].envelope,
             bpm: detector.bpm,
             bpm_stable: detector.bpm_stable(),
         };
@@ -652,6 +755,9 @@ fn run_analysis_loop(
             payload.mid,
             payload.high,
             payload.level,
+            payload.beat_low,
+            payload.beat_mid,
+            payload.beat_high,
             payload.beat,
         ];
         let _ = app.emit("vizzy://audio-levels", payload);
