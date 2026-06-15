@@ -599,10 +599,7 @@ impl MasterReadback {
 struct MasterTarget {
     // read by the Syphon (macOS) / Spout (Windows) publish and the GPU test
     // readbacks only
-    #[cfg_attr(
-        not(any(target_os = "macos", target_os = "windows")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
@@ -1354,47 +1351,48 @@ impl GpuCore {
 
         // Per-deck filter pass: sampler + raw deck source + the filter uniform
         // (kind/amount/param2) + the deck's resolution/time/audio uniform.
-        let filter_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("vizzy-filter-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        let filter_bind_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("vizzy-filter-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(16),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(32),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(16),
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(32),
+                        },
+                        count: None,
+                    },
+                ],
+            });
         let filter_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("vizzy-filter-layout"),
@@ -3684,7 +3682,12 @@ fn fs_patch(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{
         let padded = read_texture(&core, &core._deck_filter_textures[0], dw, dh);
         let filtered = unpad_rows(&padded, dw as usize, dh as usize);
         let o = ((dh as usize / 2) * dw as usize + dw as usize / 2) * 4;
-        let (r, g, b, a) = (filtered[o], filtered[o + 1], filtered[o + 2], filtered[o + 3]);
+        let (r, g, b, a) = (
+            filtered[o],
+            filtered[o + 1],
+            filtered[o + 2],
+            filtered[o + 3],
+        );
         assert!(
             r > 230 && g > 230 && b < 40 && a > 250,
             "invert of blue should be yellow, got r={r} g={g} b={b} a={a}"

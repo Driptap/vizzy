@@ -39,8 +39,19 @@ pub struct SlotFrame {
 /// ("none") is the off state. Append-only: adding a filter must not renumber
 /// the existing entries.
 pub const FILTER_KINDS: [&str; 13] = [
-    "none", "invert", "hue", "posterize", "pixelate", "scanlines", "edge", "rgbSplit", "kaleido",
-    "swirl", "blur", "lumaKey", "ripple",
+    "none",
+    "invert",
+    "hue",
+    "posterize",
+    "pixelate",
+    "scanlines",
+    "edge",
+    "rgbSplit",
+    "kaleido",
+    "swirl",
+    "blur",
+    "lumaKey",
+    "ripple",
 ];
 
 /// Map a filter id to its shader index; an unknown id reads as "none" (0).

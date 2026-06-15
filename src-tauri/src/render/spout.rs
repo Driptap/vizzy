@@ -126,9 +126,7 @@ fn write_name_slot(slot: &mut [u8], name: &str) {
 
 fn slot_matches(slot: &[u8], name: &str) -> bool {
     let bytes = name.as_bytes();
-    bytes.len() < NAME_LEN
-        && slot[..bytes.len()] == *bytes
-        && slot.get(bytes.len()) == Some(&0)
+    bytes.len() < NAME_LEN && slot[..bytes.len()] == *bytes && slot.get(bytes.len()) == Some(&0)
 }
 
 pub(crate) struct SpoutOut {
