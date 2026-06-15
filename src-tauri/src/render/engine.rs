@@ -32,7 +32,7 @@ const PREVIEW_SIZE: (u32, u32) = (160, 90);
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const JPEG_QUALITY: u8 = 70;
 const FRAME_EVENT: &str = "vizzy://render-frame";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const TEXTURE_SHARE_EVENT: &str = "vizzy://texture-share";
 const GLOW_EVENT: &str = "vizzy://glow";
 
