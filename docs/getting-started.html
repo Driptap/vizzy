@@ -173,6 +173,23 @@
   }
   footer .cta:hover { transform: translate(-.1em,-.1em); box-shadow: .38em .38em 0 var(--cyan); color: var(--bg); }
 
+  /* screenshots */
+  .fig { margin: 1.1em 0 .2em; }
+  .fig img {
+    display: block; max-width: 100%; height: auto;
+    border: 1px solid rgba(43,245,255,.32);
+    border-radius: .45em;
+    background: #07060c;
+    box-shadow: 0 8px 26px rgba(0,0,0,.55);
+  }
+  .fig.full img { width: 100%; border-color: rgba(255,61,242,.32); }
+  .fig figcaption {
+    margin-top: .5em; font-size: .76em; letter-spacing: .03em;
+    color: rgba(244,241,234,.6);
+  }
+  .shots { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 1.1rem 1.3rem; }
+  .shots .fig { margin: .6em 0 0; }
+
   @keyframes rise {
     from { opacity: 0; transform: translateY(1.1rem); }
     to   { opacity: 1; transform: none; }
@@ -204,6 +221,12 @@
     </p>
   </header>
 
+  <figure class="fig full" style="width:min(52rem,100%); margin-top:1.9rem">
+    <img src="guide/rig-full.png" loading="lazy"
+         alt="The Vizzy interface: top bar of controls, two scene views with the mixer between them, and four deck builder cards along the bottom">
+    <figcaption>The whole instrument: the top bar, Scene&nbsp;A · mixer · Scene&nbsp;B, and the four-channel builder row. (Previews are black here only because this shot was taken without the engine running.)</figcaption>
+  </figure>
+
   <section class="guide">
 
     <article class="step" style="animation-delay:.36s">
@@ -222,6 +245,11 @@
           cover installing Ollama and pulling a model manually. The
           <span class="ui">LLM</span> dot in the top bar is green when you're connected.
         </p>
+        <figure class="fig full">
+          <img src="guide/step00-setup.png" loading="lazy"
+               alt="Vizzy's first-run model picker — the Give Vizzy a Brain screen, listing Qwen and Llama models with a Download model & start button">
+          <figcaption>First launch: pick a model, hit <b>Download model &amp; start</b> — or <i>Skip for now</i> to look around (generation stays off until a model is ready).</figcaption>
+        </figure>
       </div>
     </article>
 
@@ -254,6 +282,18 @@
           of a flat shader. You can also right-click anything in the
           <span class="ui alt">Library</span> to drop it straight onto a channel.
         </p>
+        <div class="shots">
+          <figure class="fig">
+            <img src="guide/step01-cue.png" loading="lazy" style="max-width:304px"
+                 alt="CUE A and CUE B buttons at the top of the mixer">
+            <figcaption><b>CUE A</b> points the builder row at Scene A.</figcaption>
+          </figure>
+          <figure class="fig">
+            <img src="guide/step01-generate.png" loading="lazy" style="max-width:358px"
+                 alt="A deck's prompt box with the GLSL/SCENE toggle and the Generate button">
+            <figcaption>Type a prompt, pick <b>GLSL</b> or <b>SCENE</b>, hit <b>Generate</b>.</figcaption>
+          </figure>
+        </div>
       </div>
     </article>
 
@@ -285,6 +325,11 @@
           microphone permission the first time — allow it, then toggle
           <span class="ui">Live</span> off and on.
         </p>
+        <figure class="fig">
+          <img src="guide/step02-audio.png" loading="lazy" style="max-width:242px"
+               alt="The Audio group in the top bar: an input-device dropdown and the Live button">
+          <figcaption>The <b>Audio</b> group: choose a device, then click <b>Live</b>.</figcaption>
+        </figure>
       </div>
     </article>
 
@@ -302,6 +347,11 @@
           Each channel also has an <b>M</b> mute and its own fader, so within a
           scene you're mixing four layers additively before the crossfade.
         </p>
+        <figure class="fig">
+          <img src="guide/step03-crossfader.png" loading="lazy" style="max-width:324px"
+               alt="The A–B crossfader at the bottom of the mixer">
+          <figcaption>The <b>A–B crossfader</b> blends the two scenes (double-click to flip).</figcaption>
+        </figure>
       </div>
     </article>
 
@@ -337,6 +387,28 @@
         publishes the master to Resolume / MadMapper / OBS over <b>Syphon</b>
         (macOS) or <b>Spout</b> (Windows).</dd>
     </dl>
+    <div class="shots" style="padding: 0 1.2em 1.2em">
+      <figure class="fig">
+        <img src="guide/more-master-share.png" loading="lazy" style="max-width:289px"
+             alt="Master Out, Syphon and Glow buttons in the top bar">
+        <figcaption>Output: <b>Master Out</b>, share (Syphon/Spout), <b>Glow</b>.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="guide/more-filter.png" loading="lazy" style="max-width:101px"
+             alt="A deck's FILTER dropdown">
+        <figcaption>Per-deck <b>FILTER</b>.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="guide/more-bpm.png" loading="lazy" style="max-width:108px"
+             alt="The BPM field in the top bar">
+        <figcaption><b>BPM</b> drives the loopers.</figcaption>
+      </figure>
+      <figure class="fig">
+        <img src="guide/more-midi.png" loading="lazy" style="max-width:117px"
+             alt="The MIDI Learn button in the top bar">
+        <figcaption><b>MIDI Learn</b> to bind hardware.</figcaption>
+      </figure>
+    </div>
   </section>
 
   <footer>
