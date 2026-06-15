@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MODEL_CATALOG } from '../llm/models';
+import { AudioMeterStrip } from './AudioMeterStrip';
+import type { MeterStore } from '../hooks/useAudioMeters';
 
 const CUSTOM = '__custom__';
 
@@ -51,6 +53,9 @@ interface TopBarProps {
   onResetRig: () => void;
   bpm: number;
   onBpmChange: (bpm: number) => void;
+  meterStore: MeterStore;
+  meterPanelOpen: boolean;
+  onToggleMeterPanel: () => void;
 }
 
 export function TopBar({
@@ -79,6 +84,9 @@ export function TopBar({
   onResetRig,
   bpm,
   onBpmChange,
+  meterStore,
+  meterPanelOpen,
+  onToggleMeterPanel,
 }: TopBarProps) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
@@ -212,6 +220,11 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <AudioMeterStrip
+          store={meterStore}
+          expanded={meterPanelOpen}
+          onToggle={onToggleMeterPanel}
+        />
         <div className="flex items-center gap-1" title="Global tempo — drives every deck's looper">
           <span className="text-[10px] uppercase tracking-wider text-neutral-500">BPM</span>
           <input

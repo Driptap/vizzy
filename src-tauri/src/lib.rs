@@ -17,6 +17,7 @@ pub fn run() {
             audio::audio_start,
             audio::audio_stop,
             audio::audio_list_devices,
+            audio::audio_set_beat_config,
             midi::midi_start,
             midi::midi_stop,
             midi::midi_input_count,

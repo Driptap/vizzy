@@ -1,7 +1,8 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample};
@@ -21,6 +22,16 @@ const BAND_MID: (f32, f32) = (250.0, 2000.0);
 const BAND_HIGH: (f32, f32) = (2000.0, 8000.0);
 const BAND_LEVEL: (f32, f32) = (20.0, 16000.0);
 
+// Beat detection (multi-band spectral flux). Tuned for the 16 ms analysis tick.
+const FLUX_WINDOW: usize = 43; // ~0.7 s of flux history for the adaptive median
+const FLUX_FLOOR: f32 = 0.008; // absolute floor so near-silence can't trigger
+const ONSET_DEBOUNCE_MS: f64 = 110.0; // ignore retriggers within one transient
+const IOI_MIN_S: f32 = 0.27; // 220 BPM — fastest accepted inter-onset interval
+const IOI_MAX_S: f32 = 1.5; //  40 BPM — slowest accepted inter-onset interval
+const IOI_HISTORY: usize = 8; // inter-onset intervals kept for the tempo estimate
+const BPM_FOLD_LO: f32 = 80.0; // octave-fold detected tempo into [80, 180)
+const BPM_FOLD_HI: f32 = 180.0;
+
 /// Sentinel device id for the synthetic "Computer audio" entry — capture the
 /// machine's own output. Resolved per-OS in `resolve_target`: WASAPI loopback
 /// on Windows, the PipeWire/PulseAudio monitor source on Linux, a virtual
@@ -33,17 +44,188 @@ pub struct AudioDevice {
     pub label: String,
 }
 
-/// Raw band averages 0..1 (low, mid, high, level) shared with the render
-/// thread, which applies the 1.4 gain and per-frame 0.15 lerp itself.
-pub type RawLevels = Arc<Mutex<[f32; 4]>>;
+/// Raw audio drivers shared with the render thread: `[low, mid, high, level,
+/// beat]`. The first four are band averages 0..1 — the render thread applies
+/// the 1.4 gain and per-frame 0.15 lerp itself. `beat` (index 4) is the already
+/// shaped onset envelope and is passed through **un-smoothed** on both sides.
+pub type RawLevels = Arc<Mutex<[f32; 5]>>;
 
-/// Raw band averages 0..1 — emitted to the webview for the UI meters.
+/// Beat-detector tuning, mutated live from the UI via `audio_set_beat_config`.
+#[derive(Clone, Copy)]
+pub struct BeatConfig {
+    /// Scales the adaptive onset threshold (higher = fewer beats). 0.5..3.0.
+    pub sensitivity: f32,
+    /// Per-tick fall of the beat envelope (higher = tighter flash). 0.02..0.5.
+    pub decay: f32,
+}
+
+impl Default for BeatConfig {
+    fn default() -> Self {
+        Self {
+            sensitivity: 1.4,
+            decay: 0.12,
+        }
+    }
+}
+
+impl BeatConfig {
+    /// Copy the values out so the mutex is released before the per-tick work.
+    fn clone_values(&self) -> Self {
+        *self
+    }
+}
+
+/// Shared handle to the live beat config.
+pub type BeatCfg = Arc<Mutex<BeatConfig>>;
+
+/// Raw band averages 0..1 plus beat/tempo — emitted to the webview for the UI
+/// meters and the BPM-sync path.
 #[derive(serde::Serialize, Clone)]
 struct AudioLevels {
     low: f32,
     mid: f32,
     high: f32,
     level: f32,
+    /// Onset envelope 0..1 (snaps to 1 on a beat, decays). Not smoothed downstream.
+    beat: f32,
+    /// Detected tempo; 0 until enough onsets have accumulated.
+    bpm: f32,
+    /// True when the recent inter-onset intervals are consistent enough to trust.
+    #[serde(rename = "bpmStable")]
+    bpm_stable: bool,
+}
+
+/// Per-band spectral-flux onset detector with an inter-onset-interval tempo
+/// estimate. Lives on the analysis thread; one instance per capture session.
+struct BeatDetector {
+    prev_bins: [f32; NUM_BINS],
+    /// Recent normalized flux per detection band (low, mid, high).
+    flux_hist: [VecDeque<f32>; 3],
+    prev_flux: [f32; 3],
+    envelope: f32,
+    last_onset_ms: f64,
+    /// Inter-onset intervals in seconds, newest last.
+    ioi: VecDeque<f32>,
+    bpm: f32,
+}
+
+impl BeatDetector {
+    fn new() -> Self {
+        Self {
+            prev_bins: [0.0; NUM_BINS],
+            flux_hist: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            prev_flux: [0.0; 3],
+            envelope: 0.0,
+            last_onset_ms: 0.0,
+            ioi: VecDeque::new(),
+            bpm: 0.0,
+        }
+    }
+
+    /// Advance one analysis tick. `now_ms` is the elapsed capture time.
+    fn process(&mut self, bins: &[f32; NUM_BINS], sample_rate: u32, cfg: &BeatConfig, now_ms: f64) {
+        let ranges = [
+            band_range(sample_rate, BAND_LOW.0, BAND_LOW.1),
+            band_range(sample_rate, BAND_MID.0, BAND_MID.1),
+            band_range(sample_rate, BAND_HIGH.0, BAND_HIGH.1),
+        ];
+
+        // Positive spectral flux per band, normalized by bin count so the bands
+        // (and a single threshold floor) are comparable despite differing widths.
+        let mut onset = false;
+        for (b, &(start, end)) in ranges.iter().enumerate() {
+            let mut sum = 0.0f32;
+            for (cur, prev) in bins[start..=end].iter().zip(&self.prev_bins[start..=end]) {
+                let d = cur - prev;
+                if d > 0.0 {
+                    sum += d;
+                }
+            }
+            let flux = sum / (end - start + 1).max(1) as f32;
+            let threshold = median(&self.flux_hist[b]) * cfg.sensitivity + FLUX_FLOOR;
+            // A rising flux above the adaptive threshold is an onset in this band.
+            if flux > threshold && flux > self.prev_flux[b] {
+                onset = true;
+            }
+            self.prev_flux[b] = flux;
+            self.flux_hist[b].push_back(flux);
+            if self.flux_hist[b].len() > FLUX_WINDOW {
+                self.flux_hist[b].pop_front();
+            }
+        }
+        self.prev_bins.copy_from_slice(bins);
+
+        // Envelope decays every tick; an accepted onset snaps it back to 1.
+        self.envelope = (self.envelope - cfg.decay).max(0.0);
+        if onset && now_ms - self.last_onset_ms > ONSET_DEBOUNCE_MS {
+            if self.last_onset_ms > 0.0 {
+                let ioi = ((now_ms - self.last_onset_ms) / 1000.0) as f32;
+                if (IOI_MIN_S..=IOI_MAX_S).contains(&ioi) {
+                    self.ioi.push_back(ioi);
+                    if self.ioi.len() > IOI_HISTORY {
+                        self.ioi.pop_front();
+                    }
+                    self.update_bpm();
+                }
+            }
+            self.last_onset_ms = now_ms;
+            self.envelope = 1.0;
+        }
+    }
+
+    /// Re-estimate tempo from the median inter-onset interval, octave-folded into
+    /// a musical range and smoothed to damp jitter.
+    fn update_bpm(&mut self) {
+        let med = median(&self.ioi);
+        if med <= 0.0 {
+            return;
+        }
+        let mut candidate = 60.0 / med;
+        while candidate < BPM_FOLD_LO {
+            candidate *= 2.0;
+        }
+        while candidate >= BPM_FOLD_HI {
+            candidate /= 2.0;
+        }
+        if self.bpm <= 0.0 {
+            self.bpm = candidate;
+        } else {
+            self.bpm += (candidate - self.bpm) * 0.1;
+        }
+    }
+
+    /// Tempo is trustworthy once several recent intervals agree closely.
+    fn bpm_stable(&self) -> bool {
+        if self.ioi.len() < 4 {
+            return false;
+        }
+        let mean = self.ioi.iter().sum::<f32>() / self.ioi.len() as f32;
+        if mean <= 0.0 {
+            return false;
+        }
+        let var = self
+            .ioi
+            .iter()
+            .map(|x| (x - mean) * (x - mean))
+            .sum::<f32>()
+            / self.ioi.len() as f32;
+        var.sqrt() / mean < 0.1
+    }
+}
+
+/// Median of a small sample (used for the adaptive flux threshold and tempo).
+fn median(vals: &VecDeque<f32>) -> f32 {
+    if vals.is_empty() {
+        return 0.0;
+    }
+    let mut v: Vec<f32> = vals.iter().copied().collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
 }
 
 /// Circular buffer of the most recent FFT_SIZE mono samples.
@@ -88,8 +270,10 @@ struct Capture {
 #[derive(Default)]
 pub struct AudioState {
     capture: Mutex<Option<Capture>>,
-    /// Latest raw band values, read in-process by the render thread.
+    /// Latest raw audio drivers, read in-process by the render thread.
     raw: RawLevels,
+    /// Live beat-detector tuning, shared with the analysis thread.
+    beat_config: BeatCfg,
 }
 
 impl AudioState {
@@ -97,6 +281,11 @@ impl AudioState {
     /// audio reactivity decays to silence through the render-side lerp.
     pub fn raw_levels(&self) -> RawLevels {
         Arc::clone(&self.raw)
+    }
+
+    /// Shared beat config, cloned into the analysis thread on capture start.
+    pub fn beat_config(&self) -> BeatCfg {
+        Arc::clone(&self.beat_config)
     }
 
     pub fn stop(&self) {
@@ -107,7 +296,7 @@ impl AudioState {
             let _ = capture.stream_thread.join();
             let _ = capture.analysis_thread.join();
         }
-        *lock_ignore_poison(&self.raw) = [0.0; 4];
+        *lock_ignore_poison(&self.raw) = [0.0; 5];
     }
 }
 
@@ -168,7 +357,10 @@ pub fn audio_start(
         let ring = Arc::clone(&ring);
         let running = Arc::clone(&running);
         let raw = state.raw_levels();
-        std::thread::spawn(move || run_analysis_loop(app, ring, running, raw, sample_rate))
+        let beat_config = state.beat_config();
+        std::thread::spawn(move || {
+            run_analysis_loop(app, ring, running, raw, beat_config, sample_rate)
+        })
     };
 
     *lock_ignore_poison(&state.capture) = Some(Capture {
@@ -183,6 +375,15 @@ pub fn audio_start(
 #[tauri::command]
 pub fn audio_stop(state: tauri::State<'_, AudioState>) {
     state.stop();
+}
+
+/// Live-tune the beat detector. Safe to call whether or not capture is running;
+/// the analysis loop reads this every tick.
+#[tauri::command]
+pub fn audio_set_beat_config(state: tauri::State<'_, AudioState>, sensitivity: f32, decay: f32) {
+    let mut cfg = lock_ignore_poison(&state.beat_config);
+    cfg.sensitivity = sensitivity.clamp(0.5, 3.0);
+    cfg.decay = decay.clamp(0.02, 0.5);
 }
 
 fn run_stream_thread(
@@ -406,12 +607,16 @@ fn run_analysis_loop(
     ring: Arc<Mutex<Ring>>,
     running: Arc<AtomicBool>,
     raw: RawLevels,
+    beat_config: BeatCfg,
     sample_rate: u32,
 ) {
     let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
     let window: Vec<f32> = (0..FFT_SIZE).map(|n| blackman(n, FFT_SIZE)).collect();
     let mut buf = vec![Complex::new(0.0f32, 0.0); FFT_SIZE];
     let mut bins = [0.0f32; NUM_BINS];
+    let mut detector = BeatDetector::new();
+    // Wall-clock onset timing — sleep drift would bias inter-onset intervals.
+    let started = Instant::now();
 
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(ANALYSIS_INTERVAL);
@@ -426,14 +631,29 @@ fn run_analysis_loop(
             *bin = normalize_db(20.0 * mag.log10());
         }
 
+        let now_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let cfg = lock_ignore_poison(&beat_config).clone_values();
+        detector.process(&bins, sample_rate, &cfg, now_ms);
+
         let payload = AudioLevels {
             low: band_average(&bins, sample_rate, BAND_LOW.0, BAND_LOW.1),
             mid: band_average(&bins, sample_rate, BAND_MID.0, BAND_MID.1),
             high: band_average(&bins, sample_rate, BAND_HIGH.0, BAND_HIGH.1),
             level: band_average(&bins, sample_rate, BAND_LEVEL.0, BAND_LEVEL.1),
+            beat: detector.envelope,
+            bpm: detector.bpm,
+            bpm_stable: detector.bpm_stable(),
         };
-        // render thread reads in-process; the event only feeds the UI meters
-        *lock_ignore_poison(&raw) = [payload.low, payload.mid, payload.high, payload.level];
+        // render thread reads in-process; the event feeds the UI meters + BPM sync.
+        // `bpm` is intentionally omitted from `raw`: the looper gets BPM from the
+        // frontend, so the render thread never needs the detected value.
+        *lock_ignore_poison(&raw) = [
+            payload.low,
+            payload.mid,
+            payload.high,
+            payload.level,
+            payload.beat,
+        ];
         let _ = app.emit("vizzy://audio-levels", payload);
     }
 }

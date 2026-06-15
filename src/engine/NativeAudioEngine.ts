@@ -13,7 +13,15 @@ interface NativeAudioDevice {
   label: string;
 }
 
-const zero = (): AudioLevels => ({ low: 0, mid: 0, high: 0, level: 0 });
+const zero = (): AudioLevels => ({
+  low: 0,
+  mid: 0,
+  high: 0,
+  level: 0,
+  beat: 0,
+  bpm: 0,
+  bpmStable: false,
+});
 
 export class NativeAudioEngine {
   private raw: AudioLevels = zero();
@@ -50,6 +58,12 @@ export class NativeAudioEngine {
     this.raw = zero();
   }
 
+  // Live-tune the native beat detector (sensitivity scales the onset threshold,
+  // decay sets how fast the beat envelope falls). Safe whether or not running.
+  async setBeatConfig(sensitivity: number, decay: number): Promise<void> {
+    await invoke('audio_set_beat_config', { sensitivity, decay }).catch(() => {});
+  }
+
   async listDevices(): Promise<MediaDeviceInfo[]> {
     const devices = await invoke<NativeAudioDevice[]>('audio_list_devices');
     return devices.map(
@@ -63,7 +77,8 @@ export class NativeAudioEngine {
     );
   }
 
-  // Called once per animation frame; returns lerp-smoothed 0..1 band values.
+  // Called once per animation frame; returns lerp-smoothed 0..1 band values
+  // plus the beat envelope and detected tempo.
   update(): AudioLevels {
     const target = this.running
       ? {
@@ -78,6 +93,12 @@ export class NativeAudioEngine {
     s.mid += (target.mid - s.mid) * SMOOTHING;
     s.high += (target.high - s.high) * SMOOTHING;
     s.level += (target.level - s.level) * SMOOTHING;
+    // Beat is already shaped in audio.rs: pass it through with NO gain and NO
+    // lerp, mirroring the render evaluator (evaluate.rs). bpm/stable likewise
+    // ride straight through for the meters and BPM-sync path.
+    s.beat = this.running ? this.raw.beat : 0;
+    s.bpm = this.running ? this.raw.bpm : 0;
+    s.bpmStable = this.running ? this.raw.bpmStable : false;
     return s;
   }
 }

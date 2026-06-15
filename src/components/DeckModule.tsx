@@ -67,6 +67,7 @@ const BANDS: { id: AudioBand; label: string }[] = [
   { id: 'mid', label: 'MID' },
   { id: 'high', label: 'HI' },
   { id: 'level', label: 'LVL' },
+  { id: 'beat', label: 'BEAT' },
 ];
 
 interface DeckModuleProps {

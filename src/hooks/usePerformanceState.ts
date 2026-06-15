@@ -28,6 +28,8 @@ import type {
 } from '../types';
 
 const DEFAULT_BPM = 120;
+const DEFAULT_BEAT_SENSITIVITY = 1.4;
+const DEFAULT_BEAT_DECAY = 0.12;
 
 export type PerformanceState = ReturnType<typeof usePerformanceState>;
 
@@ -55,6 +57,11 @@ export function usePerformanceState() {
     Array.from({ length: SLOTS }, defaultLoop),
   );
   const [bpm, setBpm] = useState(DEFAULT_BPM);
+  // When on, the native beat detector's tempo drives the global BPM (and thus
+  // the looper). Sensitivity/decay tune the detector live.
+  const [bpmSync, setBpmSync] = useState(false);
+  const [beatSensitivity, setBeatSensitivity] = useState(DEFAULT_BEAT_SENSITIVITY);
+  const [beatDecay, setBeatDecay] = useState(DEFAULT_BEAT_DECAY);
   const [fx, setFx] = useState<ChannelFx[]>(() =>
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })),
   );
@@ -118,6 +125,18 @@ export function usePerformanceState() {
 
   const applyBpm = useCallback((value: number) => {
     setBpm(Math.min(220, Math.max(40, Math.round(value) || DEFAULT_BPM)));
+  }, []);
+
+  const applyBpmSync = useCallback((on: boolean) => {
+    setBpmSync(on);
+  }, []);
+
+  const applyBeatSensitivity = useCallback((value: number) => {
+    setBeatSensitivity(Math.min(3, Math.max(0.5, value)));
+  }, []);
+
+  const applyBeatDecay = useCallback((value: number) => {
+    setBeatDecay(Math.min(0.5, Math.max(0.02, value)));
   }, []);
 
   const applyCrossfade = useCallback((value: number) => {
@@ -185,6 +204,10 @@ export function usePerformanceState() {
     setSourceTypes(Array(SLOTS).fill('shader'));
     setCrossfade(0);
     setCueScene(0);
+    setBpm(DEFAULT_BPM);
+    setBpmSync(false);
+    setBeatSensitivity(DEFAULT_BEAT_SENSITIVITY);
+    setBeatDecay(DEFAULT_BEAT_DECAY);
   }, []);
 
   // Overlay a deck preset's channel configs onto one scene's slots; fields a
@@ -238,6 +261,9 @@ export function usePerformanceState() {
       perSlot((s) => (s.loop ? { ...defaultLoop(), ...structuredClone(s.loop) } : defaultLoop()), defaultLoop),
     );
     setBpm(session.bpm ?? DEFAULT_BPM);
+    setBpmSync(session.bpmSync ?? false);
+    setBeatSensitivity(session.beatSensitivity ?? DEFAULT_BEAT_SENSITIVITY);
+    setBeatDecay(session.beatDecay ?? DEFAULT_BEAT_DECAY);
     setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
     setFilters(
       perSlot((s) => ({ ...DEFAULT_FILTER, ...(s.filter || {}) }), () => ({ ...DEFAULT_FILTER })),
@@ -259,6 +285,9 @@ export function usePerformanceState() {
     layers,
     loops,
     bpm,
+    bpmSync,
+    beatSensitivity,
+    beatDecay,
     fx,
     filters,
     aut,
@@ -277,6 +306,9 @@ export function usePerformanceState() {
     applyLayer,
     applyLoop,
     applyBpm,
+    applyBpmSync,
+    applyBeatSensitivity,
+    applyBeatDecay,
     applyCrossfade,
     applyFx,
     applyFilter,

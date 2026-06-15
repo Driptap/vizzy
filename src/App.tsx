@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry } from './types';
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
+import { AudioMeterPanel } from './components/AudioMeterPanel';
+import { BpmSyncBridge } from './components/BpmSyncBridge';
 import { Tutorial } from './components/Tutorial';
 import { SetupScreen } from './components/SetupScreen';
 import { DeckModule } from './components/DeckModule';
@@ -14,6 +16,7 @@ import { useMasterWindow } from './hooks/useMasterWindow';
 import { useLlmSetup } from './hooks/useLlmSetup';
 import { useGeneration } from './hooks/useGeneration';
 import { useAudioControls } from './hooks/useAudioControls';
+import { useAudioMeters } from './hooks/useAudioMeters';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
 import { useLibrary, isShaderEntry } from './hooks/useLibrary';
 
@@ -39,6 +42,18 @@ export default function App() {
 
   const audio = useAudioControls(audioRef);
   const master = useMasterWindow(engineRef);
+
+  // Live audio metering + the expandable meter panel.
+  const meterStore = useAudioMeters(audioRef, perf.fx);
+  const [meterPanelOpen, setMeterPanelOpen] = useState(false);
+  const toggleMeterPanel = useCallback(() => setMeterPanelOpen((v) => !v), []);
+
+  // Push beat-detector tuning to the native core whenever it changes or capture
+  // (re)starts — so restored sensitivity/decay take effect on the next session.
+  useEffect(() => {
+    if (!audio.audioActive) return;
+    void audioRef.current?.setBeatConfig(perf.beatSensitivity, perf.beatDecay);
+  }, [audioRef, audio.audioActive, perf.beatSensitivity, perf.beatDecay]);
 
   // Texture sharing (Syphon/Spout) lives in the render core; mirror state here.
   const [syphonOn, setSyphonOn] = useState(false);
@@ -156,7 +171,25 @@ export default function App() {
         onResetRig={handleResetRig}
         bpm={perf.bpm}
         onBpmChange={perf.applyBpm}
+        meterStore={meterStore}
+        meterPanelOpen={meterPanelOpen}
+        onToggleMeterPanel={toggleMeterPanel}
       />
+
+      <BpmSyncBridge store={meterStore} enabled={perf.bpmSync} applyBpm={perf.applyBpm} />
+
+      {meterPanelOpen && (
+        <AudioMeterPanel
+          store={meterStore}
+          fx={perf.fx}
+          bpmSync={perf.bpmSync}
+          onToggleBpmSync={perf.applyBpmSync}
+          beatSensitivity={perf.beatSensitivity}
+          beatDecay={perf.beatDecay}
+          onSensitivityChange={perf.applyBeatSensitivity}
+          onDecayChange={perf.applyBeatDecay}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         <LibraryPanel

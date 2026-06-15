@@ -57,7 +57,16 @@ vi.mock('./engine/NativeAudioEngine', () => {
       this.start = vi.fn(async () => {});
       this.stop = vi.fn(async () => {});
       this.listDevices = vi.fn(async () => []);
-      this.update = vi.fn(() => ({ low: 0, mid: 0, high: 0, level: 0 }));
+      this.update = vi.fn(() => ({
+        low: 0,
+        mid: 0,
+        high: 0,
+        level: 0,
+        beat: 0,
+        bpm: 0,
+        bpmStable: false,
+      }));
+      this.setBeatConfig = vi.fn(async () => {});
     }
   }
   return { NativeAudioEngine, __audios: audios };

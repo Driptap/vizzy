@@ -15,12 +15,18 @@ export interface DeckUiState {
 }
 
 export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape' | 'scene';
-export type AudioBand = 'low' | 'mid' | 'high' | 'level';
+export type AudioBand = 'low' | 'mid' | 'high' | 'level' | 'beat';
 export interface AudioLevels {
   low: number;
   mid: number;
   high: number;
   level: number;
+  /** Onset envelope 0..1 — snaps to 1 on a detected beat, decays. Not smoothed. */
+  beat: number;
+  /** Detected tempo in BPM; 0 until enough onsets accumulate. */
+  bpm: number;
+  /** True when the recent inter-onset intervals are consistent enough to trust. */
+  bpmStable: boolean;
 }
 
 export interface ChannelFx {
@@ -284,5 +290,11 @@ export interface SessionSnapshot {
   cueScene: number;
   /** global tempo driving the deck loopers */
   bpm?: number;
+  /** when true, the detected tempo drives `bpm` */
+  bpmSync?: boolean;
+  /** beat-detector onset sensitivity (0.5..3) */
+  beatSensitivity?: number;
+  /** beat-envelope decay per tick (0.02..0.5) */
+  beatDecay?: number;
   slots: SessionSlot[];
 }

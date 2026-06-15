@@ -25,7 +25,21 @@ const defaultProps = () => ({
   onResetRig: vi.fn(),
   bpm: 120,
   onBpmChange: vi.fn(),
+  meterStore: { subscribe: () => () => {}, getSnapshot: () => meterSnapshot },
+  meterPanelOpen: false,
+  onToggleMeterPanel: vi.fn(),
 });
+
+const meterSnapshot = {
+  low: 0,
+  mid: 0,
+  high: 0,
+  level: 0,
+  beat: 0,
+  bpm: 0,
+  bpmStable: false,
+  deckLevels: [],
+};
 
 const renderTopBar = (overrides = {}) => {
   const props = { ...defaultProps(), ...overrides };
