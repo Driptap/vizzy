@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["unstable"] }
+tauri = { version = "2", features = [ "unstable"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -37,18 +37,41 @@ stl_io = "0.8"
 # vendored Syphon.framework, plus typed Metal handles shared with wgpu-hal.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSGeometry",
+    "NSURL",
+    "NSError",
+    "NSValue",
+] }
 objc2-metal = { version = "0.3", features = [
     "MTLDevice",
     "MTLCommandQueue",
     "MTLCommandBuffer",
     "MTLTexture",
 ] }
+# Native video decode (src/render/video/macos.rs): AVAssetImageGenerator frame
+# extraction → CGImage → RGBA bitmap. Raw decode, no extra runtime deps.
+objc2-av-foundation = { version = "0.3", features = [
+    "AVAsset",
+    "AVAssetImageGenerator",
+    "objc2-core-media",
+] }
+objc2-core-media = { version = "0.3", features = ["CMTime"] }
+objc2-core-graphics = { version = "0.3", features = [
+    "CGImage",
+    "CGContext",
+    "CGColorSpace",
+] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 
 # Spout texture sharing (src/render/spout.rs): a native Spout 2 sender built on
 # raw Win32 — a D3D11 shared texture plus the shared-memory sender registry, no
 # C++ SDK linkage. Pinned to the windows crate version wgpu/tauri already pull.
 [target.'cfg(target_os = "windows")'.dependencies]
+# Win32_Media_MediaFoundation + COM features (last block): native video decode
+# via IMFSourceReader (src/render/video/mf.rs) — Media Foundation ships with
+# Windows, so no extra runtime for users.
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -58,7 +81,19 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_System_Memory",
     "Win32_System_Threading",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
+
+# Native video decode on Linux (src/render/video/gst.rs): GStreamer
+# decodebin→appsink. Building needs the GStreamer dev packages; running needs
+# the runtime + plugins (incl. the v4l2 HW decoder for Pi 5 HEVC).
+[target.'cfg(target_os = "linux")'.dependencies]
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
 
 [profile.release]
 strip = true

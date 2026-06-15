@@ -6,6 +6,7 @@ import {
   saveDeck,
   saveModel,
   saveSprite,
+  saveVideo,
   renameShader,
   updateEntry,
   deleteEntry,
@@ -13,7 +14,7 @@ import {
   writeSeededMarker,
 } from '../lib/shaderLibrary';
 import { makeSpriteThumbnail } from '../lib/spriteLoader';
-import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS, VIDEO_EXTENSIONS } from '../lib/assetTypes';
 import { getPlatform } from '../platform';
 import { stageSource, resolveSourceRef } from '../lib/sourceStaging';
 import {
@@ -33,6 +34,7 @@ import type {
   ShaderEntry,
   SpriteEntry,
   StageableSource,
+  VideoEntry,
 } from '../types';
 import type { EngineRef } from './useEngineRig';
 import type { PerformanceState } from './usePerformanceState';
@@ -157,6 +159,19 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
+  const addVideoPaths = useCallback(async (items: Array<{ sourcePath: string; name: string }>) => {
+    try {
+      const added: LibraryEntry[] = [];
+      for (const { sourcePath, name } of items) {
+        // eslint-disable-next-line no-await-in-loop
+        added.push(await saveVideo({ sourcePath, name }));
+      }
+      setLibrary((prev) => [...added, ...prev]);
+    } catch (err) {
+      console.error('[Vizzy] Adding video failed:', err);
+    }
+  }, []);
+
   /** Route absolute paths (native drops / native picker) by extension. */
   const handleAddPaths = useCallback(
     async (paths: string[]) => {
@@ -168,10 +183,12 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
         exts.some((ext) => p.toLowerCase().endsWith(ext));
       const models = paths.filter((p) => matches(p, MODEL_EXTENSIONS)).map(item);
       const sprites = paths.filter((p) => matches(p, SPRITE_EXTENSIONS)).map(item);
+      const videos = paths.filter((p) => matches(p, VIDEO_EXTENSIONS)).map(item);
       if (models.length) await addModelPaths(models);
       if (sprites.length) await addSpritePaths(sprites);
+      if (videos.length) await addVideoPaths(videos);
     },
-    [addModelPaths, addSpritePaths],
+    [addModelPaths, addSpritePaths, addVideoPaths],
   );
 
   // The webview swallows DOM drop events; file drops arrive as native paths.
@@ -186,6 +203,22 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     async (entry: ModelEntry, channel: number) => {
       const result = await stageOntoSlot(slotIndex(cueScene, channel), { type: 'model', entry });
       // first assign captures a thumbnail once the preview has the model
+      if (result.ok && !entry.screenshot) {
+        setTimeout(async () => {
+          const shot = engineRef.current?.getPreviewDataURL(channel);
+          if (!shot) return;
+          const updated = await updateEntry({ ...entry, screenshot: shot });
+          setLibrary((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+        }, 700);
+      }
+    },
+    [stageOntoSlot, engineRef, cueScene],
+  );
+
+  const handleAssignVideo = useCallback(
+    async (entry: VideoEntry, channel: number) => {
+      const result = await stageOntoSlot(slotIndex(cueScene, channel), { type: 'video', entry });
+      // capture a thumbnail from the rendered first frame on first assign
       if (result.ok && !entry.screenshot) {
         setTimeout(async () => {
           const shot = engineRef.current?.getPreviewDataURL(channel);
@@ -249,6 +282,8 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           channels.push({ modelId: source.modelId, ...config });
         } else if (source.type === 'sprite') {
           channels.push({ spriteId: source.spriteId, ...config });
+        } else if (source.type === 'video') {
+          channels.push({ videoId: source.videoId, ...config });
         } else if (source.type === 'landscape') {
           channels.push({ landscapeId: source.modelId, ...config });
         } else if (source.type === 'scene') {
@@ -379,6 +414,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleSaveDeck,
     handleAddPaths,
     handleAssignSprite,
+    handleAssignVideo,
     handleAssignModel,
     handleAssignLandscape,
     handleAssignScene,

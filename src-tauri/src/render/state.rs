@@ -53,6 +53,44 @@ pub struct SlotState {
     pub filter: FilterState,
     #[serde(rename = "loop")]
     pub loop_: Option<LoopState>,
+    /// Present only on video decks; drives the per-frame playhead.
+    pub video: Option<VideoPlayback>,
+}
+
+/// Per-deck video playback controls, pushed from the frontend.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VideoPlayback {
+    /// Playback speed magnitude (0..4).
+    pub rate: f32,
+    /// Play backward.
+    pub reverse: bool,
+    /// "loop" | "once" | "ping" (ping = ping-pong).
+    pub loop_mode: String,
+    /// Lock the clip loop to the global tempo, stretched to `beat_div` beats.
+    pub beat_sync: bool,
+    pub beat_div: f32,
+    /// On each detected beat: restart the clip.
+    pub beat_jump: bool,
+    /// Modulate playback speed with the beat envelope.
+    pub beat_rate: bool,
+    /// Flip play direction on each beat.
+    pub beat_flip: bool,
+}
+
+impl Default for VideoPlayback {
+    fn default() -> Self {
+        Self {
+            rate: 1.0,
+            reverse: false,
+            loop_mode: "loop".into(),
+            beat_sync: false,
+            beat_div: 4.0,
+            beat_jump: false,
+            beat_rate: false,
+            beat_flip: false,
+        }
+    }
 }
 
 /// The post filter on this deck's visible output. `kind` is one of the
@@ -97,6 +135,7 @@ impl Default for SlotState {
             aut: AutMap::default(),
             filter: FilterState::default(),
             loop_: None,
+            video: None,
         }
     }
 }

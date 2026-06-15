@@ -17,6 +17,7 @@ import type {
   PatchSpec,
   SceneSpec,
   StageResult,
+  VideoPlayback,
 } from '../types';
 
 const SLOTS = 8;
@@ -39,6 +40,12 @@ interface FramePayload {
 interface SpriteMeta {
   width: number;
   height: number;
+}
+
+interface VideoMeta {
+  width: number;
+  height: number;
+  durationS: number;
 }
 
 interface LandscapeMeta {
@@ -65,6 +72,7 @@ interface SlotState {
   aut: AutomationMap;
   filter: SlotFilter;
   loop: DeckLoop | null;
+  video?: VideoPlayback | null;
 }
 
 interface SlotFilter {
@@ -101,6 +109,7 @@ const defaultSlot = (): SlotState => ({
   aut: emptyAut(),
   filter: { kind: 'none', amount: 0.5, param2: 0.5 },
   loop: null,
+  video: null,
 });
 
 const hexToRgb = (hex: string): [number, number, number] => {
@@ -146,6 +155,21 @@ export class NativeRenderEngine {
       this.resizeObserver = new ResizeObserver(() => this.markDirty());
       this.resizeObserver.observe(this.views.a);
     }
+  }
+
+  /** Re-point the scene monitors at a different pair of canvases. Used when the
+   *  app swaps between the studio layout and the full-screen performance layout
+   *  — each owns its own canvas elements, but there is one engine. The deck
+   *  aspect follows the new A view, so keep A at the intended output aspect. */
+  setViewCanvases(views: ViewCanvases): void {
+    this.views = { a: views.a ?? null, b: views.b ?? null };
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined' && this.views.a) {
+      this.resizeObserver = new ResizeObserver(() => this.markDirty());
+      this.resizeObserver.observe(this.views.a);
+    }
+    this.markDirty();
   }
 
   private subscribe(): void {
@@ -282,6 +306,11 @@ export class NativeRenderEngine {
     this.markDirty();
   }
 
+  setVideoPlayback(deckIndex: number, playback: VideoPlayback): void {
+    this.slots[deckIndex].video = playback;
+    this.markDirty();
+  }
+
   setFilter(deckIndex: number, kind: FilterKind, amount: number, param2: number): void {
     this.slots[deckIndex].filter = { kind, amount, param2 };
     this.markDirty();
@@ -348,6 +377,20 @@ export class NativeRenderEngine {
     try {
       await invoke<SpriteMeta>('render_stage_sprite', { slot: deckIndex, path });
       this.sources[deckIndex] = { type: 'sprite', spriteId };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: typeof err === 'string' ? err : String(err) };
+    }
+  }
+
+  async stageVideoFromPath(
+    deckIndex: number,
+    path: string,
+    videoId: string,
+  ): Promise<StageResult> {
+    try {
+      await invoke<VideoMeta>('render_stage_video', { slot: deckIndex, path });
+      this.sources[deckIndex] = { type: 'video', videoId };
       return { ok: true };
     } catch (err) {
       return { ok: false, error: typeof err === 'string' ? err : String(err) };

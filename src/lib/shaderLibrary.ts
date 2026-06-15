@@ -11,6 +11,7 @@ import type {
   SceneSpec,
   ShaderEntry,
   SpriteEntry,
+  VideoEntry,
 } from '../types';
 import { getPlatform, joinPath, extname } from '../platform';
 
@@ -192,7 +193,41 @@ export async function getSpriteFilePath(entry: SpriteEntry): Promise<string> {
   return joinPath(dir, entry.file);
 }
 
-/** Model/sprite entry from in-memory bytes (used by the first-run seeder). */
+/** A video entry: a clip file copied into <userData>/videos/. */
+export async function saveVideo({
+  sourcePath,
+  name = '',
+  screenshot = null,
+}: {
+  sourcePath: string;
+  name?: string;
+  screenshot?: string | null;
+}): Promise<VideoEntry> {
+  const p = getPlatform();
+  const dir = await p.dirs.videos();
+  const ext = extname(sourcePath).toLowerCase();
+  const id = makeId('video');
+  const file = `${id}${ext}`;
+  await p.fs.copy(sourcePath, joinPath(dir, file));
+  const entry: VideoEntry = { id, kind: 'video', name, file, screenshot, createdAt: Date.now() };
+  await writeEntry(entry);
+  return entry;
+}
+
+export async function getVideoFilePath(entry: VideoEntry): Promise<string> {
+  const dir = await getPlatform().dirs.videos();
+  return joinPath(dir, entry.file);
+}
+
+/** Asset-folder for a file-backed entry kind. */
+async function assetDirFor(kind: 'model' | 'sprite' | 'video'): Promise<string> {
+  const p = getPlatform();
+  if (kind === 'model') return p.dirs.models();
+  if (kind === 'video') return p.dirs.videos();
+  return p.dirs.sprites();
+}
+
+/** Model/sprite/video entry from in-memory bytes (used by the first-run seeder). */
 export async function saveAssetFromBuffer({
   kind,
   name = '',
@@ -200,14 +235,14 @@ export async function saveAssetFromBuffer({
   ext,
   screenshot = null,
 }: {
-  kind: 'model' | 'sprite';
+  kind: 'model' | 'sprite' | 'video';
   name?: string;
   bytes: Uint8Array;
   ext: string;
   screenshot?: string | null;
 }): Promise<AssetEntry> {
   const p = getPlatform();
-  const dir = kind === 'model' ? await p.dirs.models() : await p.dirs.sprites();
+  const dir = await assetDirFor(kind);
   const id = makeId(kind);
   const file = `${id}${ext}`;
   await p.fs.writeBytes(joinPath(dir, file), bytes);
@@ -233,8 +268,10 @@ export async function deleteEntry(
   const p = getPlatform();
   const dir = await p.dirs.shaders();
   await p.fs.remove(joinPath(dir, `${entry.id}.json`));
-  if (entry.file && (entry.kind === 'model' || entry.kind === 'sprite')) {
-    const assetDir = entry.kind === 'model' ? await p.dirs.models() : await p.dirs.sprites();
-    await p.fs.remove(joinPath(assetDir, entry.file));
+  if (
+    entry.file &&
+    (entry.kind === 'model' || entry.kind === 'sprite' || entry.kind === 'video')
+  ) {
+    await p.fs.remove(joinPath(await assetDirFor(entry.kind), entry.file));
   }
 }

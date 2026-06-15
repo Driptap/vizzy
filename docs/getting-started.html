@@ -315,15 +315,18 @@
         </p>
         <p>
           Vizzy now measures four smoothed bands every frame —
-          <b>low</b>, <b>mid</b>, <b>high</b> and overall <b>level</b> — and
-          feeds them to every visual. Most generated patches already react out
-          of the box, so play some music and watch it move.
+          <b>low</b>, <b>mid</b>, <b>high</b> and overall <b>level</b> — plus a
+          <b>beat detector</b> (separate kick / snare / hat layers) and automatic
+          <b>BPM</b>, and feeds them to every visual. Most generated patches
+          already react out of the box, so play some music and watch it move.
         </p>
         <p>
           Want to steer <i>how</i> it reacts? Open a channel's
-          <b>AUDIO</b> tab and set <b>BAND</b> (which band drives it) and
-          <b>AMT</b> (how hard). Automation effects with the <b>♪</b> marker lit
-          follow the same routing.
+          <b>AUDIO</b> tab and set <b>BAND</b> (which band — or a beat layer —
+          drives it) and <b>AMT</b> (how hard). Automation effects with the
+          <b>♪</b> marker lit follow the same routing. The meter panel in the top
+          bar shows every level and lets you tune the beat detector and sync the
+          detected BPM.
         </p>
         <p class="tip">
           <b>No reaction?</b> Check the device is actually receiving signal and
@@ -378,8 +381,16 @@
       <dt>Library &amp; Save</dt>
       <dd><span class="ui dim">SAVE</span> on a channel snapshots its running
         visual (with a thumbnail); <b>SAVE DECK</b> stores all four channels of
-        the cued scene. Drop <code>.glb / .gltf / .obj / .stl</code> models and
-        <code>.png / .jpg</code> images straight onto the 3D / IMG tabs.</dd>
+        the cued scene. Drop <code>.glb / .gltf / .obj / .stl</code> models,
+        <code>.png / .jpg</code> images and <code>.mp4 / .mov / .webm</code>
+        video clips straight onto the 3D / IMG / VID tabs.</dd>
+
+      <dt>Video clips</dt>
+      <dd>Assign a clip and it plays through the same shader, filter and
+        composite pipeline as everything else — so every effect applies. The
+        deck's <span class="ui">VIDEO</span> tab sets <b>rate</b>, direction,
+        loop/once/ping-pong, and beat-linked playback (sync to the BPM, restart
+        or flip on the beat).</dd>
 
       <dt>Hands-on control (MIDI)</dt>
       <dd>Toggle <span class="ui dim">MIDI Learn</span>, click a fader or the

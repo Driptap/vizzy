@@ -14,7 +14,7 @@ export interface DeckUiState {
   error: string | null;
 }
 
-export type SourceType = 'shader' | 'model' | 'sprite' | 'landscape' | 'scene';
+export type SourceType = 'shader' | 'model' | 'sprite' | 'video' | 'landscape' | 'scene';
 export type AudioBand =
   | 'low'
   | 'mid'
@@ -167,6 +167,8 @@ export interface ChannelConfig {
   aut: AutomationMap;
   loop: DeckLoop;
   filter: ChannelFilter;
+  /** video playback controls — only meaningful on video decks */
+  video?: VideoPlayback;
 }
 
 // ---- LLM-generated deck patches ----
@@ -266,6 +268,31 @@ export interface SpriteEntry extends EntryBase {
   file: string;
 }
 
+export interface VideoEntry extends EntryBase {
+  kind: 'video';
+  file: string;
+}
+
+export type VideoLoopMode = 'loop' | 'once' | 'ping';
+
+/** Per-deck video playback controls (sent to the native player each frame). */
+export interface VideoPlayback {
+  /** playback speed magnitude, 0..4 */
+  rate: number;
+  /** play backward */
+  reverse: boolean;
+  loopMode: VideoLoopMode;
+  /** lock the clip loop to the global BPM, stretched to `beatDiv` beats */
+  beatSync: boolean;
+  beatDiv: number;
+  /** restart the clip on each detected beat */
+  beatJump: boolean;
+  /** pulse playback speed with the beat envelope */
+  beatRate: boolean;
+  /** flip play direction on each beat */
+  beatFlip: boolean;
+}
+
 export interface SceneEntry extends EntryBase {
   kind: 'scene';
   spec: SceneSpec;
@@ -273,14 +300,22 @@ export interface SceneEntry extends EntryBase {
   prompt?: string;
 }
 
-export type AssetEntry = ModelEntry | SpriteEntry;
-export type LibraryEntry = ShaderEntry | DeckEntry | ModelEntry | SpriteEntry | SceneEntry;
+export type AssetEntry = ModelEntry | SpriteEntry | VideoEntry;
+export type LibraryEntry =
+  | ShaderEntry
+  | DeckEntry
+  | ModelEntry
+  | SpriteEntry
+  | VideoEntry
+  | SceneEntry;
 
 /** A deck-preset channel: config plus a reference to what was running. */
 export type DeckChannelConfig = Partial<ChannelConfig> & {
   shaderId?: string;
   modelId?: string;
   spriteId?: string;
+  /** a video clip entry */
+  videoId?: string;
   /** a model entry staged in landscape mode (fly-over terrain) */
   landscapeId?: string;
   /** a procedural scene entry */
@@ -294,6 +329,7 @@ export type ChannelSource =
   | { type: 'shader'; patch: PatchSpec }
   | { type: 'model'; modelId: string }
   | { type: 'sprite'; spriteId: string }
+  | { type: 'video'; videoId: string }
   | { type: 'landscape'; modelId: string }
   | { type: 'scene'; spec: SceneSpec };
 
@@ -302,6 +338,7 @@ export type StageableSource =
   | { type: 'shader'; patch: PatchSpec }
   | { type: 'model'; entry: ModelEntry }
   | { type: 'sprite'; entry: SpriteEntry }
+  | { type: 'video'; entry: VideoEntry }
   | { type: 'landscape'; entry: ModelEntry }
   | { type: 'scene'; spec: SceneSpec };
 

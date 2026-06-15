@@ -15,6 +15,7 @@ import type {
   FilterKind,
   LoopControlId,
   SourceType,
+  VideoPlayback,
 } from '../types';
 
 const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = {
@@ -110,6 +111,12 @@ interface DeckModuleProps {
     field: 'amt' | 'audio',
     value: number | boolean,
   ) => void;
+  videoPlayback: VideoPlayback;
+  onVideoChange: <K extends keyof VideoPlayback>(
+    channel: number,
+    key: K,
+    value: VideoPlayback[K],
+  ) => void;
   onGenerate: (channel: number, prompt: string, mode: 'shader' | 'scene') => void;
   onRegenerate: (channel: number, prompt: string, mode: 'shader' | 'scene') => void;
   onSave: (channel: number) => void | Promise<void>;
@@ -143,6 +150,8 @@ export function DeckModule({
   onFilterChange,
   aut,
   onAutChange,
+  videoPlayback,
+  onVideoChange,
   onGenerate,
   onRegenerate,
   onSave,
@@ -173,8 +182,13 @@ export function DeckModule({
   const badge = STATUS_STYLES[status] || STATUS_STYLES.idle;
   const busy = BUSY_STATUSES.includes(status);
 
-  // LIGHT only exists for lit deck types; fall back if the source changes
-  const tabs = LIT_SOURCES.includes(sourceType) ? [...TABS, 'LIGHT'] : TABS;
+  // LIGHT only exists for lit deck types; VIDEO only for video decks.
+  const tabs =
+    sourceType === 'video'
+      ? [...TABS, 'VIDEO']
+      : LIT_SOURCES.includes(sourceType)
+        ? [...TABS, 'LIGHT']
+        : TABS;
   const effectiveTab = tabs.includes(tab) ? tab : 'XFRM';
 
   const activeFilter = FILTERS.find((f) => f.id === filter.kind) ?? FILTERS[0];
@@ -442,6 +456,106 @@ export function DeckModule({
               format={(v) => `${v.toFixed(2)}x`}
               onChange={(v) => onFxChange(index, 'amt', v)}
             />
+          </>
+        )}
+
+        {effectiveTab === 'VIDEO' && (
+          <>
+            <Knob
+              label="RATE"
+              value={videoPlayback.rate}
+              min={0}
+              max={4}
+              defaultValue={1}
+              format={(v) => `${v.toFixed(2)}x`}
+              onChange={(v) => onVideoChange(index, 'rate', v)}
+            />
+            <div className="flex flex-col items-center gap-1">
+              <div className="grid grid-cols-3 overflow-hidden rounded border border-neutral-700">
+                {(['loop', 'once', 'ping'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => onVideoChange(index, 'loopMode', m)}
+                    title={
+                      m === 'loop'
+                        ? 'Loop continuously'
+                        : m === 'once'
+                          ? 'Play once and hold the last frame'
+                          : 'Ping-pong (forward then reverse)'
+                    }
+                    className={`px-1.5 py-1 text-[8px] font-bold transition-colors ${
+                      videoPlayback.loopMode === m
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    {m.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => onVideoChange(index, 'reverse', !videoPlayback.reverse)}
+                title="Play backward (ignored in ping-pong / beat-flip)"
+                className={`w-full rounded px-1.5 py-0.5 text-[8px] font-bold transition-colors ${
+                  videoPlayback.reverse
+                    ? 'bg-cyan-600 text-white'
+                    : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                REV
+              </button>
+              <span className="text-[8px] font-bold tracking-wider text-neutral-500">PLAY</span>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <div className="grid grid-cols-2 gap-0.5">
+                {(
+                  [
+                    ['beatSync', 'SYNC', 'Lock the loop to the BPM'],
+                    ['beatJump', 'JUMP', 'Restart on each beat'],
+                    ['beatRate', 'RATE', 'Pulse speed with the beat'],
+                    ['beatFlip', 'FLIP', 'Flip direction on each beat'],
+                  ] as const
+                ).map(([key, label, title]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => onVideoChange(index, key, !videoPlayback[key])}
+                    title={title}
+                    className={`rounded px-1.5 py-0.5 text-[8px] font-bold transition-colors ${
+                      videoPlayback[key]
+                        ? 'bg-fuchsia-600 text-white'
+                        : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[8px] font-bold tracking-wider text-neutral-500">BEAT</span>
+            </div>
+            {videoPlayback.beatSync && (
+              <div className="flex flex-col items-center gap-1">
+                <div className="grid grid-cols-2 overflow-hidden rounded border border-neutral-700">
+                  {[1, 2, 4, 8].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => onVideoChange(index, 'beatDiv', n)}
+                      className={`px-1.5 py-1 text-[8px] font-bold transition-colors ${
+                        videoPlayback.beatDiv === n
+                          ? 'bg-cyan-600 text-white'
+                          : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[8px] font-bold tracking-wider text-neutral-500">BEATS</span>
+              </div>
+            )}
           </>
         )}
 

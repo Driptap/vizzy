@@ -1,7 +1,7 @@
 // One staging path for everything that can land on a deck slot, used by
 // library assignment, deck-preset loading and session restore alike. The
 // native core loads asset files itself — it gets paths, not parsed objects.
-import { getModelFilePath, getSpriteFilePath } from './shaderLibrary';
+import { getModelFilePath, getSpriteFilePath, getVideoFilePath } from './shaderLibrary';
 import type { NativeRenderEngine } from '../engine/NativeRenderEngine';
 import type {
   ChannelSource,
@@ -14,6 +14,7 @@ import type {
   SpriteEntry,
   StageResult,
   StageableSource,
+  VideoEntry,
 } from '../types';
 
 const failed = (result: StageResult | undefined): StageResult =>
@@ -41,6 +42,11 @@ export async function stageSource(
         await engine.stageSpriteFromPath(slot, await getSpriteFilePath(source.entry), source.entry.id),
       );
     }
+    if (source.type === 'video') {
+      return failed(
+        await engine.stageVideoFromPath(slot, await getVideoFilePath(source.entry), source.entry.id),
+      );
+    }
     if (source.type === 'scene') {
       return failed(await engine.stageSceneSpec(slot, source.spec));
     }
@@ -66,6 +72,7 @@ export function resolveSourceRef(
   const anyRef = ref as {
     modelId?: string;
     spriteId?: string;
+    videoId?: string;
     shaderId?: string;
     landscapeId?: string;
     sceneId?: string;
@@ -106,6 +113,12 @@ export function resolveSourceRef(
     return entry
       ? { source: { type: 'sprite', entry: entry as SpriteEntry } }
       : { error: 'Saved sprite is missing from the library' };
+  }
+  if (anyRef.videoId) {
+    const entry = byId.get(anyRef.videoId);
+    return entry && entry.kind === 'video'
+      ? { source: { type: 'video', entry: entry as VideoEntry } }
+      : { error: 'Saved video is missing from the library' };
   }
   if (anyRef.shaderId) {
     const entry = byId.get(anyRef.shaderId);

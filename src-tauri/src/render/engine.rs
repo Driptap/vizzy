@@ -145,6 +145,17 @@ pub(crate) enum Job {
         mesh: Box<StagedMesh>,
         reply: SyncSender<Result<(), String>>,
     },
+    /// Start a video on a slot: upload the first frame for immediate display and
+    /// spawn the decode thread that feeds subsequent frames.
+    StageVideo {
+        slot: usize,
+        path: std::path::PathBuf,
+        meta: super::video::VideoMeta,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        reply: SyncSender<Result<(), String>>,
+    },
     OpenMaster {
         surface: Box<wgpu::Surface<'static>>,
         size: Arc<AtomicU64>,
@@ -339,6 +350,46 @@ pub async fn render_stage_sprite(
         reply,
     })?;
     Ok(SpriteMeta { width, height })
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMeta {
+    pub width: u32,
+    pub height: u32,
+    pub duration_s: f64,
+}
+
+#[tauri::command]
+pub async fn render_stage_video(
+    state: tauri::State<'_, RenderState>,
+    slot: u32,
+    path: String,
+) -> Result<VideoMeta, String> {
+    let slot = check_slot(slot)?;
+    // Probe + decode the first frame on the command thread (validates the file,
+    // gives instant display). The render thread uploads that frame and spawns a
+    // decode thread (which re-opens the clip on its own thread) for playback.
+    let mut source = super::video::open(Path::new(&path))?;
+    let meta = source.meta();
+    let frame = source
+        .frame_at(0.0)
+        .ok_or_else(|| "could not decode the first video frame".to_string())?;
+    drop(source);
+    run_job(&state, |reply| Job::StageVideo {
+        slot,
+        path: std::path::PathBuf::from(&path),
+        meta,
+        width: frame.width,
+        height: frame.height,
+        rgba: frame.rgba,
+        reply,
+    })?;
+    Ok(VideoMeta {
+        width: meta.width,
+        height: meta.height,
+        duration_s: meta.duration_s,
+    })
 }
 
 #[tauri::command]
@@ -2214,6 +2265,51 @@ impl GpuCore {
         Ok(())
     }
 
+    /// Upload a video frame, reusing the existing sprite texture in place when
+    /// the dimensions match (the common case — only `write_texture`, no
+    /// allocation). On a size change (or first frame) it falls back to a full
+    /// (re)stage. Called every frame for active video decks.
+    pub(crate) fn update_video_frame(
+        &mut self,
+        slot: usize,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), String> {
+        if slot >= SLOT_COUNT {
+            return Err(format!("invalid deck slot {slot}"));
+        }
+        if rgba.len() != (width as usize) * (height as usize) * 4 {
+            return Err("video frame pixel data does not match its dimensions".into());
+        }
+        let reuse = matches!(
+            &self.deck_content[slot],
+            DeckContent::Sprite { _texture, .. }
+                if _texture.width() == width && _texture.height() == height
+        );
+        if reuse {
+            if let DeckContent::Sprite { _texture, .. } = &self.deck_content[slot] {
+                self.queue.write_texture(
+                    _texture.as_image_copy(),
+                    rgba,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            Ok(())
+        } else {
+            self.stage_sprite(slot, width, height, rgba)
+        }
+    }
+
     /// Upload one base-colour texture: sRGB format (hardware decode at
     /// sample time) with a full CPU box-filtered mip chain.
     fn upload_mesh_texture(&self, tex: &content::MeshTexture) -> Result<wgpu::Texture, String> {
@@ -3034,6 +3130,69 @@ fn encode_jpeg_base64(rgba: &[u8], width: u32, height: u32) -> Option<String> {
     Some(BASE64.encode(jpeg))
 }
 
+/// Advance one video deck's playhead for this frame. Mutates `player.playhead`
+/// and `player.dir`; the caller then seeks the decode thread there. `beat` is
+/// the combined beat envelope (0..1) for the beat-linked behaviours.
+fn advance_video_playhead(
+    player: &mut super::video::VideoPlayer,
+    params: &super::state::VideoPlayback,
+    bpm: f32,
+    t: f32,
+    dt: f32,
+    beat: f32,
+) {
+    let dur = if player.meta.duration_s > 0.01 {
+        player.meta.duration_s
+    } else {
+        1.0
+    };
+    // Rising edge of the beat envelope — one trigger per beat.
+    let onset = beat > 0.6 && player.prev_beat <= 0.6;
+    player.prev_beat = beat;
+
+    // Beat-synced loop: the clip is tempo-locked, stretched to `beat_div` beats,
+    // exactly like the deck loopers' phase (evaluate.rs).
+    if params.beat_sync {
+        let beats = (params.beat_div.max(0.25)) as f64;
+        let phase = ((t as f64 * bpm as f64 / 60.0) / beats).rem_euclid(1.0);
+        player.playhead = phase * dur;
+        return;
+    }
+
+    // Direction: ping-pong and beat-flip own `dir`; otherwise it follows `reverse`.
+    if params.loop_mode != "ping" && !params.beat_flip {
+        player.dir = if params.reverse { -1 } else { 1 };
+    }
+    if params.beat_flip && onset {
+        player.dir = -player.dir;
+    }
+
+    let mut rate = params.rate.max(0.0) as f64;
+    if params.beat_rate {
+        rate *= 1.0 + 1.5 * beat as f64; // pulse faster on hits
+    }
+    player.playhead += dt as f64 * rate * player.dir as f64;
+
+    match params.loop_mode.as_str() {
+        "once" => player.playhead = player.playhead.clamp(0.0, dur),
+        "ping" => {
+            if player.playhead > dur {
+                player.playhead = dur - (player.playhead - dur);
+                player.dir = -1;
+            } else if player.playhead < 0.0 {
+                player.playhead = -player.playhead;
+                player.dir = 1;
+            }
+        }
+        _ => player.playhead = player.playhead.rem_euclid(dur),
+    }
+
+    // Beat-triggered restart (stutter/glitch).
+    if params.beat_jump && onset {
+        player.playhead = 0.0;
+    }
+}
+
 fn render_loop(
     mut core: GpuCore,
     app: tauri::AppHandle,
@@ -3055,6 +3214,10 @@ fn render_loop(
     let mut spout_readback: Option<MasterReadback> = None;
     let mut frame: u64 = 0;
     let mut next_frame = Instant::now();
+    // Active video decks. Staging anything onto a slot clears its player, so a
+    // reassigned deck stops decoding; a None slot is a non-video deck.
+    let mut video_players: Vec<Option<super::video::VideoPlayer>> =
+        (0..SLOT_COUNT).map(|_| None).collect();
 
     loop {
         loop {
@@ -3062,6 +3225,7 @@ fn render_loop(
                 Ok(Job::Stage { slot, patch, reply }) => {
                     let result = core.set_deck_patch(slot, *patch);
                     if result.is_ok() {
+                        video_players[slot] = None;
                         evaluator.set_content(slot, ContentAnim::Shader);
                     }
                     let _ = reply.send(result);
@@ -3075,6 +3239,7 @@ fn render_loop(
                 }) => {
                     let result = core.stage_sprite(slot, width, height, &rgba);
                     if result.is_ok() {
+                        video_players[slot] = None;
                         evaluator.set_content(
                             slot,
                             ContentAnim::Sprite {
@@ -3085,10 +3250,34 @@ fn render_loop(
                     }
                     let _ = reply.send(result);
                 }
+                Ok(Job::StageVideo {
+                    slot,
+                    path,
+                    meta,
+                    width,
+                    height,
+                    rgba,
+                    reply,
+                }) => {
+                    // Upload the first frame now; playback follows from the thread.
+                    let result = core.stage_sprite(slot, width, height, &rgba);
+                    if result.is_ok() {
+                        evaluator.set_content(
+                            slot,
+                            ContentAnim::Sprite {
+                                image_aspect: width as f32 / height.max(1) as f32,
+                                spin: 0.0,
+                            },
+                        );
+                        video_players[slot] = Some(super::video::VideoPlayer::spawn(path, meta));
+                    }
+                    let _ = reply.send(result);
+                }
                 Ok(Job::StageMesh { slot, mesh, reply }) => {
                     let content = mesh.kind.content_anim();
                     let result = core.stage_mesh(slot, *mesh);
                     if result.is_ok() {
+                        video_players[slot] = None;
                         evaluator.set_content(slot, content);
                     }
                     let _ = reply.send(result);
@@ -3165,6 +3354,25 @@ fn render_loop(
         let dt = (time - last_time.unwrap_or(time)).min(0.1);
         last_time = Some(time);
         let evaluated = evaluator.evaluate(&msg, raw, time, dt);
+
+        // Advance each video deck's playhead and upload its current frame before
+        // drawing — video then flows through the sprite/filter/composite path.
+        // raw[7] is the combined beat envelope (audio.rs) for the beat behaviours.
+        for (slot, player) in video_players.iter_mut().enumerate() {
+            let Some(player) = player.as_mut() else {
+                continue;
+            };
+            let params = msg
+                .slots
+                .get(slot)
+                .and_then(|s| s.video.clone())
+                .unwrap_or_default();
+            advance_video_playhead(player, &params, msg.bpm, time, dt, raw[7]);
+            player.set_target(player.playhead);
+            if let Some(f) = player.take_frame() {
+                let _ = core.update_video_frame(slot, f.width, f.height, &f.rgba);
+            }
+        }
 
         core.ensure_aspect(evaluated.aspect);
         // The offscreen master follows the window size when one is open.

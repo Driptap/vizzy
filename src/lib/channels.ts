@@ -5,6 +5,7 @@ import type {
   ChannelFilter,
   ChannelFx,
   ChannelLight,
+  VideoPlayback,
 } from '../types';
 import { defaultLoop } from './loopControls';
 
@@ -27,6 +28,18 @@ export const INITIAL_OPACITIES = [1, 0, 0, 0, 1, 0, 0, 0];
 export const DEFAULT_FX: ChannelFx = { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 };
 
 export const DEFAULT_LIGHT: ChannelLight = { brightness: 1, angle: 0 };
+
+// per-deck video playback: forward, looping, full rate, beat-links off
+export const DEFAULT_VIDEO_PLAYBACK: VideoPlayback = {
+  rate: 1,
+  reverse: false,
+  loopMode: 'loop',
+  beatSync: false,
+  beatDiv: 4,
+  beatJump: false,
+  beatRate: false,
+  beatFlip: false,
+};
 
 // per-deck output filter: off by default, with both generic knobs mid-travel
 // so a freshly picked filter is immediately visible

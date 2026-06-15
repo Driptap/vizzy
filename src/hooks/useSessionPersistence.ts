@@ -68,7 +68,7 @@ export function useSessionPersistence({
 
   // Autosave: snapshot the whole performance state on any change, debounced
   // to disk; the latest snapshot is also flushed synchronously on app close.
-  const { prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, bpmSync, beatBands, fx, filters, aut, crossfade, cueScene, sourceTypes, decks } = state;
+  const { prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, bpmSync, beatBands, fx, filters, aut, videoPlayback, crossfade, cueScene, sourceTypes, decks } = state;
   useEffect(() => {
     if (!sessionReadyRef.current) return undefined;
     const engine = engineRef.current;
@@ -93,6 +93,7 @@ export function useSessionPersistence({
         fx: fx[i],
         filter: filters[i],
         aut: aut[i],
+        video: sourceTypes[i] === 'video' ? videoPlayback[i] : undefined,
       })),
     };
     sessionSnapshotRef.current = snapshot;
@@ -101,7 +102,7 @@ export function useSessionPersistence({
       saveSession(snapshot).catch((err) => console.warn('[Vizzy] Session save failed:', err));
     }, 800);
     return () => clearTimeout(sessionTimerRef.current);
-  }, [engineRef, prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, bpmSync, beatBands, fx, filters, aut, crossfade, cueScene, sourceTypes, decks]);
+  }, [engineRef, prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, bpm, bpmSync, beatBands, fx, filters, aut, videoPlayback, crossfade, cueScene, sourceTypes, decks]);
 
   useEffect(() => {
     const flush = () => {

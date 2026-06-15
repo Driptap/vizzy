@@ -18,6 +18,10 @@ jobs:
             target: aarch64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+          # Raspberry Pi / arm64 — native build on a GitHub arm64 runner (no
+          # cross-compilation; the apt step + bundle paths are arch-agnostic).
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
@@ -46,7 +50,8 @@ jobs:
             \( -iname '*microsoft*' -o -iname '*azure*' \) -delete
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            librsvg2-dev libasound2-dev libudev-dev patchelf
+            librsvg2-dev libasound2-dev libudev-dev patchelf \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
       - run: npm ci
 
@@ -83,16 +88,19 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          # Each leg's artifact lands in builds/<artifact-name>/ (no merge), so
+          # the x86_64 and arm64 Linux bundles never collide on rename.
           path: builds
-          merge-multiple: true
 
       - name: Rename bundles to the stable names the site links to
         run: |
           mkdir -p assets
-          find builds -type f -name '*.dmg'      -exec cp {} assets/Vizzy-mac.dmg \;
-          find builds -type f -name '*.exe'      -exec cp {} assets/Vizzy-win.exe \;
-          find builds -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux.AppImage \;
-          find builds -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux.deb \;
+          find builds/macos-latest    -type f -name '*.dmg'      -exec cp {} assets/Vizzy-mac.dmg \;
+          find builds/windows-latest  -type f -name '*.exe'      -exec cp {} assets/Vizzy-win.exe \;
+          find builds/ubuntu-22.04     -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux.AppImage \;
+          find builds/ubuntu-22.04     -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux.deb \;
+          find builds/ubuntu-22.04-arm -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux-arm64.AppImage \;
+          find builds/ubuntu-22.04-arm -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux-arm64.deb \;
           ls -l assets
 
       - name: Update rolling "latest" release

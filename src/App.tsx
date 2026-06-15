@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry } from './types';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry, VideoEntry } from './types';
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
 import { AudioMeterPanel } from './components/AudioMeterPanel';
@@ -13,6 +13,7 @@ import { usePerformanceState } from './hooks/usePerformanceState';
 import { useEngineRig, useEngineSync } from './hooks/useEngineRig';
 import { useMidiControls } from './hooks/useMidiControls';
 import { useMasterWindow } from './hooks/useMasterWindow';
+import { PerformanceView } from './components/PerformanceView';
 import { useLlmSetup } from './hooks/useLlmSetup';
 import { useGeneration } from './hooks/useGeneration';
 import { useAudioControls } from './hooks/useAudioControls';
@@ -23,8 +24,13 @@ import { useLibrary, isShaderEntry } from './hooks/useLibrary';
 export default function App() {
   const sceneACanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneBCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // The performance layout (a full-screen reskin of this same window) owns its
+  // own scene monitors; the engine is re-pointed at whichever pair is mounted.
+  const perfACanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const perfBCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [performanceMode, setPerformanceMode] = useState(false);
 
   const perf = usePerformanceState();
   const llm = useLlmSetup();
@@ -42,6 +48,16 @@ export default function App() {
 
   const audio = useAudioControls(audioRef);
   const master = useMasterWindow(engineRef);
+
+  // Re-point the engine's scene monitors when toggling studio ↔ performance:
+  // each layout mounts its own canvas pair, so after the swap commits we hand
+  // the engine the now-mounted pair. The deck aspect follows the A view, and
+  // both A canvases are 16:9, so the output shape is unchanged across the swap.
+  useLayoutEffect(() => {
+    const a = performanceMode ? perfACanvasRef.current : sceneACanvasRef.current;
+    const b = performanceMode ? perfBCanvasRef.current : sceneBCanvasRef.current;
+    engineRef.current?.setViewCanvases({ a, b });
+  }, [engineRef, performanceMode]);
 
   // Live audio metering + the expandable meter panel.
   const meterStore = useAudioMeters(audioRef, perf.fx);
@@ -122,6 +138,17 @@ export default function App() {
     markSessionReady: session.markSessionReady,
   });
 
+  // Saved decks the performance view can cue, and the cue handler (loads a deck
+  // onto a scene's 4 channels via the existing library path).
+  const perfDecks = library.library.filter((e): e is DeckEntry => e.kind === 'deck');
+  const handleCueDeck = useCallback(
+    (deckId: string, scene: number) => {
+      const deck = perfDecks.find((d) => d.id === deckId);
+      if (deck) library.handleAssignDeck(deck, scene);
+    },
+    [perfDecks, library.handleAssignDeck],
+  );
+
   const handlePromptChange = useCallback(
     (channel: number, text: string) => perf.setPrompt(slotIndex(perf.cueScene, channel), text),
     [perf.setPrompt, perf.cueScene],
@@ -145,11 +172,26 @@ export default function App() {
           onSkip={() => llm.setSetupOpen(false)}
         />
       )}
+      <BpmSyncBridge store={meterStore} enabled={perf.bpmSync} applyBpm={perf.applyBpm} />
+
+      {performanceMode ? (
+        <PerformanceView
+          perf={perf}
+          decks={perfDecks}
+          onCueDeck={handleCueDeck}
+          onExit={() => setPerformanceMode(false)}
+          aRef={perfACanvasRef}
+          bRef={perfBCanvasRef}
+        />
+      ) : (
+        <>
       <TopBar
         libraryOpen={library.libraryOpen}
         onToggleLibrary={library.handleToggleLibrary}
         masterOpen={master.masterOpen}
         onToggleMaster={master.handleToggleMaster}
+        perfOpen={performanceMode}
+        onTogglePerf={() => setPerformanceMode((v) => !v)}
         syphonOn={syphonOn}
         onToggleSyphon={handleToggleSyphon}
         glowOn={glowOn}
@@ -176,8 +218,6 @@ export default function App() {
         onToggleMeterPanel={toggleMeterPanel}
       />
 
-      <BpmSyncBridge store={meterStore} enabled={perf.bpmSync} applyBpm={perf.applyBpm} />
-
       {meterPanelOpen && (
         <AudioMeterPanel
           store={meterStore}
@@ -197,6 +237,7 @@ export default function App() {
           decks={library.library.filter((e): e is DeckEntry => e.kind === 'deck')}
           models={library.library.filter((e): e is ModelEntry => e.kind === 'model')}
           sprites={library.library.filter((e): e is SpriteEntry => e.kind === 'sprite')}
+          videos={library.library.filter((e): e is VideoEntry => e.kind === 'video')}
           sceneLetter={sceneLetter}
           onSaveDeck={library.handleSaveDeckScene}
           onAssignDeck={library.handleAssignDeck}
@@ -204,6 +245,7 @@ export default function App() {
           onAssignModel={library.handleAssignModel}
           onAssignLandscape={library.handleAssignLandscape}
           onAssignSprite={library.handleAssignSprite}
+          onAssignVideo={library.handleAssignVideo}
           onAssignScene={library.handleAssignScene}
           onDelete={library.handleDeleteEntry}
           onRename={library.handleRenameShader}
@@ -285,6 +327,10 @@ export default function App() {
                   onAutChange={(ch, effect, field, v) =>
                     perf.applyAut(slotIndex(perf.cueScene, ch), effect, field, v)
                   }
+                  videoPlayback={perf.videoPlayback[slot]}
+                  onVideoChange={(ch, key, v) =>
+                    perf.applyVideoPlayback(slotIndex(perf.cueScene, ch), key, v)
+                  }
                   onGenerate={generation.handleGenerate}
                   onRegenerate={generation.handleRegenerate}
                   onSave={library.handleSaveDeck}
@@ -298,6 +344,8 @@ export default function App() {
           </div>
         </div>
       </div>
+        </>
+      )}
 
       <Tutorial open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
     </div>

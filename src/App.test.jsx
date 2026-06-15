@@ -23,6 +23,7 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.setAudioRouting = vi.fn();
       this.setFilter = vi.fn();
       this.setAutomation = vi.fn();
+      this.setVideoPlayback = vi.fn();
       this.setCrossfade = vi.fn();
       this.setCueScene = vi.fn();
       this.setMasterCanvas = vi.fn();

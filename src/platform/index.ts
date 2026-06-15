@@ -21,6 +21,7 @@ function createBrowserPlatform(): Platform {
       shaders: unavailable,
       models: unavailable,
       sprites: unavailable,
+      videos: unavailable,
     },
     fs: {
       readText: unavailable,

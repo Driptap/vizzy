@@ -28,6 +28,7 @@ pub fn run() {
             render::engine::render_state,
             render::engine::render_stage_patch,
             render::engine::render_stage_sprite,
+            render::engine::render_stage_video,
             render::engine::render_stage_model,
             render::engine::render_stage_landscape,
             render::engine::render_stage_scene,

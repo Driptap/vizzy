@@ -32,6 +32,8 @@ interface TopBarProps {
   onToggleLibrary: () => void;
   masterOpen: boolean;
   onToggleMaster: () => void;
+  perfOpen: boolean;
+  onTogglePerf: () => void;
   syphonOn: boolean;
   onToggleSyphon: () => void;
   glowOn: boolean;
@@ -63,6 +65,8 @@ export function TopBar({
   onToggleLibrary,
   masterOpen,
   onToggleMaster,
+  perfOpen,
+  onTogglePerf,
   syphonOn,
   onToggleSyphon,
   glowOn,
@@ -129,6 +133,16 @@ export function TopBar({
       >
         <StatusDot on={masterOpen} />
         Master Out
+      </button>
+
+      <button
+        type="button"
+        onClick={onTogglePerf}
+        title="Switch this window to the simplified, touch-friendly performance view (drag the window to a touchscreen). Click Studio to switch back."
+        className={`${TOGGLE_BASE} ${perfOpen ? 'bg-cyan-600 text-white hover:bg-cyan-500' : TOGGLE_OFF}`}
+      >
+        <StatusDot on={perfOpen} />
+        Perform
       </button>
 
       <button

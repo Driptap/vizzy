@@ -9,6 +9,7 @@ pub mod spout;
 pub mod state;
 #[cfg(target_os = "macos")]
 pub mod syphon;
+pub mod video;
 pub mod window;
 
 pub use engine::RenderState;

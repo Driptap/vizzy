@@ -35,6 +35,7 @@ export function createTauriPlatform(): Platform {
       shaders: ensuredDir('shaders'),
       models: ensuredDir('models'),
       sprites: ensuredDir('sprites'),
+      videos: ensuredDir('videos'),
     },
     fs: {
       readText: (p) => tfs.readTextFile(p),

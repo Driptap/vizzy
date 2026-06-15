@@ -21,6 +21,7 @@ export interface PlatformDirs {
   shaders(): Promise<string>;
   models(): Promise<string>;
   sprites(): Promise<string>;
+  videos(): Promise<string>;
 }
 
 export interface PlatformFs {

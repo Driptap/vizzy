@@ -7,6 +7,7 @@ import {
   DEFAULT_FILTER,
   DEFAULT_LIGHT,
   DEFAULT_LAYER,
+  DEFAULT_VIDEO_PLAYBACK,
   makeDefaultAut,
   sceneOfSlot,
 } from '../lib/channels';
@@ -26,6 +27,7 @@ import type {
   DeckUiState,
   SessionSnapshot,
   SourceType,
+  VideoPlayback,
 } from '../types';
 
 const DEFAULT_BPM = 120;
@@ -78,6 +80,9 @@ export function usePerformanceState() {
   );
   const [aut, setAut] = useState<AutomationMap[]>(() =>
     Array.from({ length: SLOTS }, makeDefaultAut),
+  );
+  const [videoPlayback, setVideoPlayback] = useState<VideoPlayback[]>(() =>
+    Array.from({ length: SLOTS }, () => ({ ...DEFAULT_VIDEO_PLAYBACK })),
   );
   const [sourceTypes, setSourceTypes] = useState<SourceType[]>(() =>
     Array(SLOTS).fill('shader'),
@@ -190,6 +195,13 @@ export function usePerformanceState() {
     [],
   );
 
+  const applyVideoPlayback = useCallback(
+    <K extends keyof VideoPlayback>(slot: number, key: K, value: VideoPlayback[K]) => {
+      setVideoPlayback((prev) => prev.map((v, i) => (i === slot ? { ...v, [key]: value } : v)));
+    },
+    [],
+  );
+
   const setSourceType = useCallback((slot: number, type: SourceType) => {
     setSourceTypes((prev) => prev.map((s, i) => (i === slot ? type : s)));
   }, []);
@@ -223,6 +235,7 @@ export function usePerformanceState() {
     setFx(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
     setFilters(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FILTER })));
     setAut(Array.from({ length: SLOTS }, makeDefaultAut));
+    setVideoPlayback(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_VIDEO_PLAYBACK })));
     setSourceTypes(Array(SLOTS).fill('shader'));
     setCrossfade(0);
     setCueScene(0);
@@ -293,6 +306,12 @@ export function usePerformanceState() {
       perSlot((s) => ({ ...DEFAULT_FILTER, ...(s.filter || {}) }), () => ({ ...DEFAULT_FILTER })),
     );
     setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
+    setVideoPlayback(
+      perSlot(
+        (s) => ({ ...DEFAULT_VIDEO_PLAYBACK, ...(s.video || {}) }),
+        () => ({ ...DEFAULT_VIDEO_PLAYBACK }),
+      ),
+    );
     setCrossfade(session.crossfade ?? 0);
     setCueScene(session.cueScene ?? 0);
   }, []);
@@ -314,6 +333,7 @@ export function usePerformanceState() {
     fx,
     filters,
     aut,
+    videoPlayback,
     sourceTypes,
     crossfade,
     cueScene,
@@ -335,6 +355,7 @@ export function usePerformanceState() {
     applyFx,
     applyFilter,
     applyAut,
+    applyVideoPlayback,
     setSourceType,
     resetChannelConfig,
     resetPerformance,

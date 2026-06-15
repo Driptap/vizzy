@@ -11,10 +11,11 @@ sharing (Syphon on macOS, Spout on Windows) into other VJ software.
 
 Decks can run LLM-designed **patches** (composed from a library of classic
 visualizer building blocks — spectrum bars, tunnels, plasma, fractals,
-matrix rain…), **images**, **3D models** (glTF/OBJ/STL, spinning or flown
-over as landscapes) and **procedural fly-through scenes**. Everything you
-make autosaves to a file-backed library and the app reopens exactly as you
-left it.
+matrix rain…), **images**, **video clips** (played through the same
+shader/effects pipeline, with rate / direction / loop and beat-linked
+playback), **3D models** (glTF/OBJ/STL, spinning or flown over as landscapes)
+and **procedural fly-through scenes**. Everything you make autosaves to a
+file-backed library and the app reopens exactly as you left it.
 
 **New to Vizzy?** The [getting-started guide](https://www.sinanguclu.co.uk/vizzy/getting-started.html)
 walks through your first visual and switching on the sound. There's also a
@@ -27,6 +28,11 @@ quick in-app tour (the **?** in the top bar).
 - From source: Node.js 20+ and a [Rust toolchain](https://rustup.rs)
 - [Ollama](https://ollama.com) for generation (Vizzy offers to install and
   manage it for you on first run)
+- **Video playback on Linux** needs GStreamer at runtime
+  (`gstreamer1.0-plugins-base` + `-good`, plus `-libav` for H.264 or the v4l2
+  decoder for hardware HEVC on a Pi 5). macOS uses AVFoundation and Windows uses
+  Media Foundation — both built in, nothing extra to install. (Building from
+  source on Linux also needs `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev`.)
 
 ## Installing Ollama
 
@@ -65,13 +71,31 @@ npm run dist         # native release bundle (dmg / nsis / AppImage + deb)
 Rust tests run from `src-tauri/`: `cargo test` (plus
 `cargo test -- --ignored` for the GPU suite on a machine with a GPU).
 
+### Raspberry Pi (arm64)
+
+A Pi 5 builds the same way — the crate's platform deps are gated by OS, not
+architecture, so aarch64 Linux is already covered. Install the prerequisites
+(Rust, Node 20+, and the Linux system packages incl. GStreamer), then
+`npm run dist`. Two Pi notes:
+
+- Release builds use link-time optimization, which is memory-hungry; on an 8 GB
+  Pi add swap, or build with `CARGO_PROFILE_RELEASE_LTO=false` if the linker
+  runs out of memory.
+- For hardware video decode, install the runtime plugins (`gstreamer1.0-plugins-bad`
+  for the v4l2 HEVC decoder); the GPU path wants Mesa's V3DV Vulkan driver.
+
+Prebuilt arm64 `.AppImage`/`.deb` are published with every release (the *Raspberry
+Pi* download), built natively on an arm64 CI runner.
+
 ## Usage
 
-1. **Audio** — pick an input device in the top bar and hit *Live*. Four bands
-   (low/mid/high/level) are computed natively (cpal + FFT) and fed to every
-   deck each frame. The **Computer audio** entry captures the system output
-   itself — WASAPI loopback on Windows, the monitor source on Linux, and a
-   virtual loopback device (BlackHole etc.) on macOS, which the entry prompts
+1. **Audio** — pick an input device in the top bar and hit *Live*. Bands
+   (low/mid/high/level) plus a multi-layer **beat detector** (kick/snare/hat,
+   each tunable) and automatic **BPM** are computed natively (cpal + FFT) and
+   fed to every deck each frame; the meter panel shows the levels and lets you
+   route beats to visuals. The **Computer audio** entry captures the system
+   output itself — WASAPI loopback on Windows, the monitor source on Linux, and
+   a virtual loopback device (BlackHole etc.) on macOS, which the entry prompts
    you to install if it can't find one.
 2. **Generate** — type a prompt in a deck and hit *Generate*. The LLM picks a
    generator from the patch catalog, a palette, warps and audio routing;
@@ -90,8 +114,9 @@ Rust tests run from `src-tauri/`: `cargo test` (plus
 5. **MIDI** — toggle *MIDI Learn*, click a fader, move a physical control:
    bound. Toggle Learn off to perform.
 6. **Library** — saves patches, deck presets (a whole scene's 4 channels),
-   images, 3D models and generated scenes. Drag files in, right-click entries
-   to assign; per-deck *SAVE* captures the running visual with a screenshot.
+   images, video clips, 3D models and generated scenes. Drag files in (incl.
+   `.mp4`/`.mov`/`.webm`), right-click entries to assign; per-deck *SAVE*
+   captures the running visual with a screenshot.
 
 ## Architecture
 

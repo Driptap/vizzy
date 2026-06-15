@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPlatform } from '../platform';
-import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS } from '../lib/assetTypes';
+import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS, VIDEO_EXTENSIONS } from '../lib/assetTypes';
 import type {
   DeckEntry,
   LibraryEntry,
@@ -8,9 +8,10 @@ import type {
   SceneEntry,
   ShaderEntry,
   SpriteEntry,
+  VideoEntry,
 } from '../types';
 
-type TabId = 'shaders' | 'scenes' | 'decks' | 'models' | 'sprites';
+type TabId = 'shaders' | 'scenes' | 'decks' | 'models' | 'sprites' | 'videos';
 
 interface ContextMenu {
   x: number;
@@ -29,6 +30,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'decks', label: 'DECKS' },
   { id: 'models', label: '3D' },
   { id: 'sprites', label: 'IMG' },
+  { id: 'videos', label: 'VID' },
 ];
 
 
@@ -36,6 +38,7 @@ const TABS: { id: TabId; label: string }[] = [
 const FILE_TABS: Partial<Record<TabId, { extensions: string[]; buttonLabel: string }>> = {
   models: { extensions: MODEL_EXTENSIONS, buttonLabel: '+ OPEN MODEL…' },
   sprites: { extensions: SPRITE_EXTENSIONS, buttonLabel: '+ OPEN IMAGE…' },
+  videos: { extensions: VIDEO_EXTENSIONS, buttonLabel: '+ OPEN VIDEO…' },
 };
 
 interface LibraryPanelProps {
@@ -45,6 +48,7 @@ interface LibraryPanelProps {
   decks: DeckEntry[];
   models: ModelEntry[];
   sprites: SpriteEntry[];
+  videos: VideoEntry[];
   sceneLetter: string;
   onSaveDeck: () => void | Promise<void>;
   onAssignDeck: (entry: DeckEntry, scene: number) => void;
@@ -52,6 +56,7 @@ interface LibraryPanelProps {
   onAssignModel: (entry: ModelEntry, channel: number) => void;
   onAssignLandscape: (entry: ModelEntry, channel: number) => void;
   onAssignSprite: (entry: SpriteEntry, channel: number) => void;
+  onAssignVideo: (entry: VideoEntry, channel: number) => void;
   onAssignScene: (entry: SceneEntry, channel: number) => void;
   onDelete: (entry: LibraryEntry) => void;
   onRename: (entry: LibraryEntry, name: string) => void;
@@ -65,6 +70,7 @@ export function LibraryPanel({
   decks,
   models,
   sprites,
+  videos,
   sceneLetter,
   onSaveDeck,
   onAssignDeck,
@@ -72,6 +78,7 @@ export function LibraryPanel({
   onAssignModel,
   onAssignLandscape,
   onAssignSprite,
+  onAssignVideo,
   onAssignScene,
   onDelete,
   onRename,
@@ -128,7 +135,9 @@ export function LibraryPanel({
           ? decks
           : tab === 'models'
             ? models
-            : sprites;
+            : tab === 'sprites'
+              ? sprites
+              : videos;
   const fileTab = FILE_TABS[tab];
 
   return (
@@ -199,6 +208,8 @@ export function LibraryPanel({
                 'No models yet — drop .glb / .obj / .stl files here, or use OPEN MODEL.'}
               {tab === 'sprites' &&
                 'No sprites yet — drop .png / .jpg / .webp / .gif files here, or use OPEN IMAGE.'}
+              {tab === 'videos' &&
+                'No videos yet — drop .mp4 / .mov / .webm files here, or use OPEN VIDEO.'}
             </p>
           )}
           {items.map((entry) => (
@@ -243,6 +254,11 @@ export function LibraryPanel({
                   IMG
                 </span>
               )}
+              {tab === 'videos' && (
+                <span className="absolute right-2.5 top-2.5 rounded bg-black/60 px-1 py-0.5 text-[8px] font-black tracking-widest text-violet-300">
+                  VID
+                </span>
+              )}
               {renamingId === entry.id ? (
                 <input
                   autoFocus
@@ -262,7 +278,9 @@ export function LibraryPanel({
                         ? 'Model name'
                         : tab === 'sprites'
                           ? 'Sprite name'
-                          : 'Shader name'
+                          : tab === 'videos'
+                            ? 'Video name'
+                            : 'Shader name'
                   }
                   className="mt-1.5 w-full rounded border border-cyan-500 bg-neutral-900 px-1.5 py-0.5 text-[10px] text-neutral-200 focus:outline-none"
                 />
@@ -298,6 +316,7 @@ export function LibraryPanel({
                   if (menu.kind === 'shaders') onAddToChannel(menu.entry as ShaderEntry, channel);
                   else if (menu.kind === 'scenes') onAssignScene(menu.entry as SceneEntry, channel);
                   else if (menu.kind === 'models') onAssignModel(menu.entry as ModelEntry, channel);
+                  else if (menu.kind === 'videos') onAssignVideo(menu.entry as VideoEntry, channel);
                   else onAssignSprite(menu.entry as SpriteEntry, channel);
                   setMenu(null);
                 }}
