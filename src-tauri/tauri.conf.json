@@ -46,6 +46,9 @@
         "role": "Editor",
         "mimeType": "application/vnd.vizzy.workspace"
       }
-    ]
+    ],
+    "resources": {
+      "icons/vizzy-document.icns": "vizzy-document.icns"
+    }
   }
 }

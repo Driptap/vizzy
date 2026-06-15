@@ -6,6 +6,16 @@ mod render;
 use tauri::Manager;
 
 pub fn run() {
+    // The Raspberry Pi's V3D driver corrupts WebKitGTK's GPU-accelerated partial
+    // repaints — the UI renders cleanly but artifacts as soon as the mouse moves,
+    // because :hover transitions trigger damage updates through the broken path.
+    // Force the CPU compositing/repaint path. Must run before the webview inits.
+    #[cfg(target_os = "linux")]
+    {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())

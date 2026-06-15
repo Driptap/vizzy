@@ -4,5 +4,28 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Vizzy analyses live audio input to drive audio-reactive visuals.</string>
+  <!--
+    Tauri's bundle.fileAssociations registers the .vizzy type but has no field
+    for a custom document icon, so we declare the document type here with
+    CFBundleTypeIconFile pointing at vizzy-document.icns (bundled into
+    Contents/Resources via bundle.resources in tauri.conf.json).
+  -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Vizzy Workspace</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>vizzy</string>
+      </array>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>vizzy-document</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+    </dict>
+  </array>
 </dict>
 </plist>
