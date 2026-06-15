@@ -246,6 +246,10 @@ export default function App() {
                   sourceType={perf.sourceTypes[slot]}
                   fx={perf.fx[slot]}
                   onFxChange={(ch, key, v) => perf.applyFx(slotIndex(perf.cueScene, ch), key, v)}
+                  filter={perf.filters[slot]}
+                  onFilterChange={(ch, key, v) =>
+                    perf.applyFilter(slotIndex(perf.cueScene, ch), key, v)
+                  }
                   aut={perf.aut[slot]}
                   onAutChange={(ch, effect, field, v) =>
                     perf.applyAut(slotIndex(perf.cueScene, ch), effect, field, v)

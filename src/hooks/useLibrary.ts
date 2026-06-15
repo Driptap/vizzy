@@ -40,7 +40,7 @@ import type { PerformanceState } from './usePerformanceState';
 interface LibraryOptions {
   engineRef: EngineRef;
   perf: PerformanceState;
-  restoreSession: (session: SessionSnapshot, entries: LibraryEntry[]) => void;
+  restoreSession: (session: SessionSnapshot, entries: LibraryEntry[]) => Promise<void>;
   loadSavedSession: () => Promise<SessionSnapshot | null>;
   markSessionReady: () => void;
 }
@@ -62,6 +62,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     layers,
     loops,
     fx,
+    filters,
     aut,
     setDeckState,
     setSourceType,
@@ -240,6 +241,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
           layer: layers[slot],
           loop: structuredClone(loops[slot]),
           fx: { ...fx[slot] },
+          filter: { ...filters[slot] },
           aut: structuredClone(aut[slot]),
         };
         const source = engine.getChannelSource(slot);
@@ -287,7 +289,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     } catch (err) {
       console.error('[Vizzy] Saving deck preset failed:', err);
     }
-  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, fx, aut]);
+  }, [engineRef, cueScene, library, prompts, opacities, muted, scales, sizes, positions, lights, layers, loops, fx, filters, aut]);
 
   // Load a deck preset into scene A or B: stage all 4 channels and restore
   // each channel's config; the engine sync effect pushes it down. Takes the
@@ -327,33 +329,41 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, []);
 
-  // Boot: load the library, then either seed the first-run example content
-  // onto scene A or restore the previous session.
+  // Boot: load the library; on first launch seed the example content, then
+  // restore the previous session if there is one. A saved session always wins
+  // over the example deck so reopening the app puts you back where you were —
+  // and autosave is enabled (markSessionReady) only after the restore has
+  // finished staging, so a slow restore can't clobber the saved session.
   useEffect(() => {
     (async () => {
       try {
         let entries = await dedupeExampleEntries(await listShaders());
-        // First launch only: create the example content and put it on scene A.
-        // The marker is a FILE in userData (localStorage is per-origin, so it
-        // alone re-seeded when switching between dev server and built app);
-        // an existing Example Deck also counts as already-seeded.
-        const alreadySeeded =
-          (await hasSeededMarker()) ||
-          getStored('seeded') ||
-          entries.some((e) => e.kind === 'deck' && e.name === EXAMPLE_DECK_NAME);
-        if (!alreadySeeded) {
-          const { deck, entries: seeded } = await seedExampleLibrary();
-          await writeSeededMarker();
-          setStored('seeded', '1');
-          entries = [...seeded, ...entries];
+        const session = await loadSavedSession();
+        if (session) {
+          // A returning user: restore where they left off and never inject
+          // example content. Awaited so autosave stays gated until staging
+          // finishes and can't overwrite the saved session with empties.
           setLibrary(entries);
-          assignDeckEntry(deck, 0, entries);
+          await restoreSession(session, entries);
         } else {
-          await writeSeededMarker(); // heal installs that only had the localStorage flag
-          setLibrary(entries);
-          const session = await loadSavedSession();
-          if (session) restoreSession(session, entries);
+          // No session. Seed the example content on genuine first launch only.
+          // The marker is a FILE in userData; an existing Example Deck also
+          // counts as already-seeded.
+          const alreadySeeded =
+            (await hasSeededMarker()) ||
+            entries.some((e) => e.kind === 'deck' && e.name === EXAMPLE_DECK_NAME);
+          if (!alreadySeeded) {
+            const { deck, entries: seeded } = await seedExampleLibrary();
+            entries = [...seeded, ...entries];
+            setLibrary(entries);
+            assignDeckEntry(deck, 0, entries);
+          } else {
+            setLibrary(entries);
+          }
         }
+        // Idempotent: also heals installs whose marker write previously failed
+        // (the marker used to be a dotfile the fs scope silently rejected).
+        await writeSeededMarker();
       } catch (err) {
         console.warn('[Vizzy] Could not load shader library:', err);
       } finally {

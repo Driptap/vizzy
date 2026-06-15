@@ -147,6 +147,6 @@ describe('seeded marker', () => {
     expect(await lib.hasSeededMarker()).toBe(false);
     await lib.writeSeededMarker();
     expect(await lib.hasSeededMarker()).toBe(true);
-    expect(fsSync.existsSync(path.join(root, '.vizzy-seeded'))).toBe(true);
+    expect(fsSync.existsSync(path.join(root, 'vizzy-seeded.json'))).toBe(true);
   });
 });

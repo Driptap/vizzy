@@ -1,4 +1,11 @@
-import type { AutEffectKey, AutomationMap, ChannelConfig, ChannelFx, ChannelLight } from '../types';
+import type {
+  AutEffectKey,
+  AutomationMap,
+  ChannelConfig,
+  ChannelFilter,
+  ChannelFx,
+  ChannelLight,
+} from '../types';
 import { defaultLoop } from './loopControls';
 
 // The channel/slot model shared by the UI, the render engine and persistence:
@@ -20,6 +27,10 @@ export const INITIAL_OPACITIES = [1, 0, 0, 0, 1, 0, 0, 0];
 export const DEFAULT_FX: ChannelFx = { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 };
 
 export const DEFAULT_LIGHT: ChannelLight = { brightness: 1, angle: 0 };
+
+// per-deck output filter: off by default, with both generic knobs mid-travel
+// so a freshly picked filter is immediately visible
+export const DEFAULT_FILTER: ChannelFilter = { kind: 'none', amount: 0.5, param2: 0.5 };
 
 // everything starts on the base layer; lift a deck to 1-3 to stack it on top
 export const DEFAULT_LAYER = 4;
@@ -44,4 +55,5 @@ export const defaultChannelConfig = (): ChannelConfig => ({
   fx: { ...DEFAULT_FX },
   aut: makeDefaultAut(),
   loop: defaultLoop(),
+  filter: { ...DEFAULT_FILTER },
 });

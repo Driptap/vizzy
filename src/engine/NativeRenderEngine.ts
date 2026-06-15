@@ -13,6 +13,7 @@ import type {
   AutomationMap,
   ChannelSource,
   DeckLoop,
+  FilterKind,
   PatchSpec,
   SceneSpec,
   StageResult,
@@ -62,7 +63,14 @@ interface SlotState {
   band: AudioBand;
   amt: number;
   aut: AutomationMap;
+  filter: SlotFilter;
   loop: DeckLoop | null;
+}
+
+interface SlotFilter {
+  kind: FilterKind;
+  amount: number;
+  param2: number;
 }
 
 const emptyAut = (): AutomationMap => ({
@@ -91,6 +99,7 @@ const defaultSlot = (): SlotState => ({
   band: 'level',
   amt: 1,
   aut: emptyAut(),
+  filter: { kind: 'none', amount: 0.5, param2: 0.5 },
   loop: null,
 });
 
@@ -270,6 +279,11 @@ export class NativeRenderEngine {
   setAudioRouting(deckIndex: number, band: AudioBand, amt: number): void {
     this.slots[deckIndex].band = band;
     this.slots[deckIndex].amt = amt;
+    this.markDirty();
+  }
+
+  setFilter(deckIndex: number, kind: FilterKind, amount: number, param2: number): void {
+    this.slots[deckIndex].filter = { kind, amount, param2 };
     this.markDirty();
   }
 

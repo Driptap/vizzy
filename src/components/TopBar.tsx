@@ -8,6 +8,23 @@ const CUSTOM = '__custom__';
 // user's receiver software (Resolume, MadMapper, OBS) will list it under.
 const SHARE_PROTOCOL = /Windows/i.test(navigator.userAgent) ? 'Spout' : 'Syphon';
 
+// Every top-bar toggle shares this footprint so they line up and never change
+// shape. State is shown by colour + a status dot, never by resizing — labels
+// stay constant and the dot keeps its slot (see StatusDot) when inactive.
+const TOGGLE_BASE =
+  'inline-flex items-center justify-center whitespace-nowrap rounded px-2.5 py-1 text-[11px] font-semibold transition-colors';
+const TOGGLE_OFF = 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600';
+
+// A leading status dot that always occupies its slot, so toggling a button on
+// or off only flips the dot's visibility — the label never shifts.
+function StatusDot({ on }: { on: boolean }) {
+  return (
+    <span aria-hidden className={`mr-1 ${on ? '' : 'opacity-0'}`}>
+      ●
+    </span>
+  );
+}
+
 interface TopBarProps {
   libraryOpen: boolean;
   onToggleLibrary: () => void;
@@ -90,12 +107,9 @@ export function TopBar({
       <button
         type="button"
         onClick={onToggleLibrary}
-        className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
-          libraryOpen
-            ? 'bg-cyan-600 text-white hover:bg-cyan-500'
-            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-        }`}
+        className={`${TOGGLE_BASE} ${libraryOpen ? 'bg-cyan-600 text-white hover:bg-cyan-500' : TOGGLE_OFF}`}
       >
+        <StatusDot on={libraryOpen} />
         Library
       </button>
 
@@ -103,29 +117,19 @@ export function TopBar({
         type="button"
         onClick={onToggleMaster}
         title="Open the crossfaded master output in its own window (double-click it for fullscreen)"
-        className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
-          masterOpen
-            ? 'bg-amber-500 text-black hover:bg-amber-400'
-            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-        }`}
+        className={`${TOGGLE_BASE} ${masterOpen ? 'bg-amber-500 text-black hover:bg-amber-400' : TOGGLE_OFF}`}
       >
-        {masterOpen ? '● Master Out' : 'Master Out'}
+        <StatusDot on={masterOpen} />
+        Master Out
       </button>
 
       <button
         type="button"
         onClick={onToggleSyphon}
         title={`Share the master output with other VJ apps (Resolume, MadMapper, OBS) over ${SHARE_PROTOCOL}`}
-        className={`whitespace-nowrap rounded px-3 py-1 text-xs font-semibold transition-colors ${
-          syphonOn
-            ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
-            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-        }`}
+        className={`${TOGGLE_BASE} ${syphonOn ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500' : TOGGLE_OFF}`}
       >
-        {/* dot always occupies its slot so the button never resizes */}
-        <span aria-hidden className={`mr-1 ${syphonOn ? '' : 'opacity-0'}`}>
-          ●
-        </span>
+        <StatusDot on={syphonOn} />
         {SHARE_PROTOCOL}
       </button>
 
@@ -133,15 +137,9 @@ export function TopBar({
         type="button"
         onClick={onToggleGlow}
         title="Soft bloom on the master output — bright areas spill a tasteful stage glow"
-        className={`whitespace-nowrap rounded px-3 py-1 text-xs font-semibold transition-colors ${
-          glowOn
-            ? 'bg-violet-600 text-white hover:bg-violet-500'
-            : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-        }`}
+        className={`${TOGGLE_BASE} ${glowOn ? 'bg-violet-600 text-white hover:bg-violet-500' : TOGGLE_OFF}`}
       >
-        <span aria-hidden className={`mr-1 ${glowOn ? '' : 'opacity-0'}`}>
-          ●
-        </span>
+        <StatusDot on={glowOn} />
         Glow
       </button>
 
@@ -162,13 +160,11 @@ export function TopBar({
         <button
           type="button"
           onClick={onToggleAudio}
-          className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
-            audioActive
-              ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-              : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-          }`}
+          title="Capture audio so the visuals react to sound"
+          className={`${TOGGLE_BASE} ${audioActive ? 'bg-emerald-600 text-white hover:bg-emerald-500' : TOGGLE_OFF}`}
         >
-          {audioActive ? '● Live' : 'Enable Audio'}
+          <StatusDot on={audioActive} />
+          Live
         </button>
       </div>
 
@@ -177,13 +173,10 @@ export function TopBar({
           type="button"
           onClick={onOpenSetup}
           title={llmReady ? 'LLM connected — open model manager' : 'LLM not set up — click to fix'}
-          className={`rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
-            llmReady
-              ? 'text-emerald-400 hover:bg-neutral-800'
-              : 'bg-amber-500 text-black hover:bg-amber-400'
-          }`}
+          className={`${TOGGLE_BASE} ${llmReady ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'bg-amber-500 text-black hover:bg-amber-400'}`}
         >
-          {llmReady ? '● LLM' : 'Setup LLM'}
+          <StatusDot on={llmReady} />
+          LLM
         </button>
         <span className="text-[10px] uppercase tracking-wider text-neutral-500">Model</span>
         <select
@@ -235,7 +228,7 @@ export function TopBar({
           type="button"
           onClick={handleResetClick}
           title="Clear all decks and the mixer back to defaults — the library is untouched"
-          className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
+          className={`${TOGGLE_BASE} min-w-[8.5rem] ${
             resetArmed
               ? 'bg-red-600 text-white hover:bg-red-500'
               : 'bg-neutral-700 text-neutral-200 hover:bg-red-900/70 hover:text-red-200'
@@ -249,13 +242,11 @@ export function TopBar({
         <button
           type="button"
           onClick={onToggleMidiLearn}
-          className={`rounded px-3 py-1 text-xs font-semibold transition-colors ${
-            midiLearn
-              ? 'bg-amber-500 text-black hover:bg-amber-400'
-              : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'
-          }`}
+          title="Map MIDI controls — toggle on, then twist a knob and move a slider to bind it"
+          className={`${TOGGLE_BASE} ${midiLearn ? 'bg-amber-500 text-black hover:bg-amber-400' : TOGGLE_OFF}`}
         >
-          {midiLearn ? 'MIDI Learn: ON' : 'MIDI Learn'}
+          <StatusDot on={midiLearn} />
+          MIDI Learn
         </button>
         <button
           type="button"

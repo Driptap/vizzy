@@ -4,6 +4,7 @@ import {
   SLOTS,
   INITIAL_OPACITIES,
   DEFAULT_FX,
+  DEFAULT_FILTER,
   DEFAULT_LIGHT,
   DEFAULT_LAYER,
   makeDefaultAut,
@@ -13,6 +14,7 @@ import { defaultLoop } from '../lib/loopControls';
 import type {
   AutEffectKey,
   AutomationMap,
+  ChannelFilter,
   ChannelFx,
   ChannelLight,
   ChannelPos,
@@ -55,6 +57,9 @@ export function usePerformanceState() {
   const [bpm, setBpm] = useState(DEFAULT_BPM);
   const [fx, setFx] = useState<ChannelFx[]>(() =>
     Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })),
+  );
+  const [filters, setFilters] = useState<ChannelFilter[]>(() =>
+    Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FILTER })),
   );
   const [aut, setAut] = useState<AutomationMap[]>(() =>
     Array.from({ length: SLOTS }, makeDefaultAut),
@@ -126,6 +131,13 @@ export function usePerformanceState() {
     [],
   );
 
+  const applyFilter = useCallback(
+    <K extends keyof ChannelFilter>(slot: number, key: K, value: ChannelFilter[K]) => {
+      setFilters((prev) => prev.map((f, i) => (i === slot ? { ...f, [key]: value } : f)));
+    },
+    [],
+  );
+
   const applyAut = useCallback(
     (slot: number, effect: AutEffectKey, field: 'amt' | 'audio', value: number | boolean) => {
       setAut((prev) =>
@@ -151,6 +163,7 @@ export function usePerformanceState() {
     setLayers((prev) => prev.map((v, i) => (i === slot ? DEFAULT_LAYER : v)));
     setLoops((prev) => prev.map((v, i) => (i === slot ? defaultLoop() : v)));
     setFx((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FX } : v)));
+    setFilters((prev) => prev.map((v, i) => (i === slot ? { ...DEFAULT_FILTER } : v)));
     setAut((prev) => prev.map((v, i) => (i === slot ? makeDefaultAut() : v)));
   }, []);
 
@@ -167,6 +180,7 @@ export function usePerformanceState() {
     setLayers(Array(SLOTS).fill(DEFAULT_LAYER));
     setLoops(Array.from({ length: SLOTS }, defaultLoop));
     setFx(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FX })));
+    setFilters(Array.from({ length: SLOTS }, () => ({ ...DEFAULT_FILTER })));
     setAut(Array.from({ length: SLOTS }, makeDefaultAut));
     setSourceTypes(Array(SLOTS).fill('shader'));
     setCrossfade(0);
@@ -193,6 +207,7 @@ export function usePerformanceState() {
       forScene(prev, (c, v) => (c.loop ? structuredClone(c.loop) : v)),
     );
     setFx((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FX, ...(c.fx ?? v) })));
+    setFilters((prev) => forScene(prev, (c, v) => ({ ...DEFAULT_FILTER, ...(c.filter ?? v) })));
     setAut((prev) =>
       forScene(prev, (c, v) =>
         c.aut ? { ...makeDefaultAut(), ...structuredClone(c.aut) } : v,
@@ -224,6 +239,9 @@ export function usePerformanceState() {
     );
     setBpm(session.bpm ?? DEFAULT_BPM);
     setFx(perSlot((s) => ({ ...DEFAULT_FX, ...(s.fx || {}) }), () => ({ ...DEFAULT_FX })));
+    setFilters(
+      perSlot((s) => ({ ...DEFAULT_FILTER, ...(s.filter || {}) }), () => ({ ...DEFAULT_FILTER })),
+    );
     setAut(perSlot((s) => ({ ...makeDefaultAut(), ...(s.aut || {}) }), makeDefaultAut));
     setCrossfade(session.crossfade ?? 0);
     setCueScene(session.cueScene ?? 0);
@@ -242,6 +260,7 @@ export function usePerformanceState() {
     loops,
     bpm,
     fx,
+    filters,
     aut,
     sourceTypes,
     crossfade,
@@ -260,6 +279,7 @@ export function usePerformanceState() {
     applyBpm,
     applyCrossfade,
     applyFx,
+    applyFilter,
     applyAut,
     setSourceType,
     resetChannelConfig,

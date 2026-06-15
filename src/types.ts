@@ -32,6 +32,30 @@ export interface ChannelFx {
   amt: number;
 }
 
+/** Per-deck post filter applied to the deck's visible output. `kind` ids match
+ *  FILTER_KINDS in the Rust engine (params.rs) and the `switch` in filter.wgsl;
+ *  `amount` and `param2` are the two generic 0..1 controls the shader reads. */
+export type FilterKind =
+  | 'none'
+  | 'invert'
+  | 'hue'
+  | 'posterize'
+  | 'pixelate'
+  | 'scanlines'
+  | 'edge'
+  | 'rgbSplit'
+  | 'kaleido'
+  | 'swirl'
+  | 'blur'
+  | 'lumaKey'
+  | 'ripple';
+
+export interface ChannelFilter {
+  kind: FilterKind;
+  amount: number;
+  param2: number;
+}
+
 export type AutEffectKey = 'scl' | 'rot' | 'tlt' | 'flk' | 'dst' | 'skw';
 export interface AutEffect {
   amt: number;
@@ -109,6 +133,7 @@ export interface ChannelConfig {
   fx: ChannelFx;
   aut: AutomationMap;
   loop: DeckLoop;
+  filter: ChannelFilter;
 }
 
 // ---- LLM-generated deck patches ----

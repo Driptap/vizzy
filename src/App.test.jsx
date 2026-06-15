@@ -21,6 +21,7 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.resetAllDecks = vi.fn();
       this.setChannelFx = vi.fn();
       this.setAudioRouting = vi.fn();
+      this.setFilter = vi.fn();
       this.setAutomation = vi.fn();
       this.setCrossfade = vi.fn();
       this.setCueScene = vi.fn();
@@ -190,7 +191,7 @@ describe('boot', () => {
 
   it('skips the setup screen when the server has the chosen model', async () => {
     await renderApp();
-    await waitFor(() => expect(screen.getByRole('button', { name: '● LLM' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'LLM' })).toBeInTheDocument());
     expect(screen.queryByTestId('setup-screen')).not.toBeInTheDocument();
   });
 
@@ -226,12 +227,11 @@ describe('first-run seeding', () => {
     await renderApp();
     await waitFor(() => expect(seedExampleLibrary).toHaveBeenCalled());
     expect(writeSeededMarker).toHaveBeenCalled();
-    expect(localStorage.getItem('vizzy.seeded')).toBe('1');
   });
 
   it('does not re-seed when the marker file exists', async () => {
     await renderApp();
-    await waitFor(() => expect(writeSeededMarker).toHaveBeenCalled()); // heals localStorage-only installs
+    await waitFor(() => expect(writeSeededMarker).toHaveBeenCalled()); // heals installs whose marker write failed
     expect(seedExampleLibrary).not.toHaveBeenCalled();
     expect(loadSession).toHaveBeenCalled();
   });

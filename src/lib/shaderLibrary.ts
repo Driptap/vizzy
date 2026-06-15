@@ -20,16 +20,24 @@ const makeId = (kind: string): string =>
 // First-run marker as a FILE next to the library data — localStorage is
 // per-origin (dev server vs file://), so a localStorage-only flag re-seeds
 // whenever the app is launched a different way.
+//
+// NOT a dotfile: the Tauri fs scope ($APPDATA/**) defaults to
+// require_literal_leading_dot=true on unix, so `**` never matches a
+// leading-dot segment and any hidden-file write is silently rejected.
+const SEEDED_MARKER = 'vizzy-seeded.json';
+
 export async function hasSeededMarker(): Promise<boolean> {
   const p = getPlatform();
-  return p.fs.exists(joinPath(await p.dirs.userData(), '.vizzy-seeded'));
+  return p.fs.exists(joinPath(await p.dirs.userData(), SEEDED_MARKER));
 }
 
 export async function writeSeededMarker(): Promise<void> {
   const p = getPlatform();
-  await p.fs
-    .writeText(joinPath(await p.dirs.userData(), '.vizzy-seeded'), String(Date.now()))
-    .catch(() => {});
+  try {
+    await p.fs.writeText(joinPath(await p.dirs.userData(), SEEDED_MARKER), String(Date.now()));
+  } catch (err) {
+    console.warn('[Vizzy] Could not write seeded marker:', err);
+  }
 }
 
 async function writeEntry(entry: LibraryEntry): Promise<void> {

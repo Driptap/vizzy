@@ -30,6 +30,31 @@ impl Default for EvaluatedFrame {
 pub struct SlotFrame {
     pub uniforms: Slot,
     pub draw: DeckDraw,
+    /// Post filter applied to this deck's rendered output this frame.
+    pub filter: FilterFrame,
+}
+
+/// Canonical per-deck filter order, shared by the TS selector, the evaluator's
+/// id→index map (`filter_kind_index`), and the `switch` in filter.wgsl. Index 0
+/// ("none") is the off state. Append-only: adding a filter must not renumber
+/// the existing entries.
+pub const FILTER_KINDS: [&str; 13] = [
+    "none", "invert", "hue", "posterize", "pixelate", "scanlines", "edge", "rgbSplit", "kaleido",
+    "swirl", "blur", "lumaKey", "ripple",
+];
+
+/// Map a filter id to its shader index; an unknown id reads as "none" (0).
+pub fn filter_kind_index(id: &str) -> u32 {
+    FILTER_KINDS.iter().position(|&k| k == id).unwrap_or(0) as u32
+}
+
+/// One deck's selected filter for a frame: the shader `kind` index plus its two
+/// generic 0..1 controls. `kind == 0` means the deck passes through untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct FilterFrame {
+    pub kind: u32,
+    pub amount: f32,
+    pub param2: f32,
 }
 
 /// Final per-slot compositor uniform values for one frame.

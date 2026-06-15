@@ -50,8 +50,30 @@ pub struct SlotState {
     pub band: String,
     pub amt: f32,
     pub aut: AutMap,
+    pub filter: FilterState,
     #[serde(rename = "loop")]
     pub loop_: Option<LoopState>,
+}
+
+/// The post filter on this deck's visible output. `kind` is one of the
+/// FILTER_KINDS ids ("none" = off); `amount` and `param2` are the two generic
+/// 0..1 controls the filter shader interprets per kind.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FilterState {
+    pub kind: String,
+    pub amount: f32,
+    pub param2: f32,
+}
+
+impl Default for FilterState {
+    fn default() -> Self {
+        Self {
+            kind: "none".into(),
+            amount: 0.5,
+            param2: 0.5,
+        }
+    }
 }
 
 impl Default for SlotState {
@@ -73,6 +95,7 @@ impl Default for SlotState {
             band: "level".into(),
             amt: 1.0,
             aut: AutMap::default(),
+            filter: FilterState::default(),
             loop_: None,
         }
     }

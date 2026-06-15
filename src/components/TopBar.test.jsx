@@ -42,11 +42,13 @@ describe('TopBar', () => {
     expect(onToggleMaster).toHaveBeenCalled();
   });
 
-  it('reflects master/audio/midi state in the button labels', () => {
+  it('reflects master/audio/midi active state via styling, not resizing labels', () => {
     renderTopBar({ masterOpen: true, audioActive: true, midiLearn: true, midiInputs: 2 });
-    expect(screen.getByRole('button', { name: '● Master Out' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '● Live' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'MIDI Learn: ON' })).toBeInTheDocument();
+    // Labels stay constant; the active state shows as a colour change so the
+    // buttons never change shape when toggled.
+    expect(screen.getByRole('button', { name: 'Master Out' })).toHaveClass('bg-amber-500');
+    expect(screen.getByRole('button', { name: 'Live' })).toHaveClass('bg-emerald-600');
+    expect(screen.getByRole('button', { name: 'MIDI Learn' })).toHaveClass('bg-amber-500');
     expect(screen.getByText('2 MIDI in')).toBeInTheDocument();
   });
 
@@ -68,13 +70,15 @@ describe('TopBar', () => {
 
   it('LLM badge reflects setup state and opens setup', () => {
     const ready = renderTopBar({ llmReady: true });
-    fireEvent.click(screen.getByRole('button', { name: '● LLM' }));
+    const button = screen.getByRole('button', { name: 'LLM' });
+    expect(button).toHaveClass('bg-emerald-600');
+    fireEvent.click(button);
     expect(ready.onOpenSetup).toHaveBeenCalled();
   });
 
-  it('shows Setup LLM when not ready', () => {
+  it('flags the LLM for setup when not ready, keeping the label constant', () => {
     renderTopBar({ llmReady: false });
-    expect(screen.getByRole('button', { name: 'Setup LLM' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'LLM' })).toHaveClass('bg-amber-500');
   });
 
   it('offers the whole model catalog and flags missing downloads', () => {

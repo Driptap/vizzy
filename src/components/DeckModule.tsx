@@ -5,12 +5,14 @@ import type {
   AudioBand,
   AutEffectKey,
   AutomationMap,
+  ChannelFilter,
   ChannelFx,
   ChannelLight,
   ChannelPos,
   ChannelSize,
   DeckLoop,
   DeckStatus,
+  FilterKind,
   LoopControlId,
   SourceType,
 } from '../types';
@@ -27,7 +29,26 @@ const STATUS_STYLES: Record<DeckStatus, { label: string; className: string }> = 
 
 const BUSY_STATUSES: DeckStatus[] = ['queued', 'generating', 'compiling'];
 
-const TABS = ['XFRM', 'AUDIO', 'COLOR', 'AUT', 'LOOP'];
+const TABS = ['XFRM', 'AUDIO', 'COLOR', 'FILTER', 'AUT', 'LOOP'];
+
+// Per-deck output filters. `id`s match FILTER_KINDS in the Rust engine
+// (params.rs) and the `switch` in filter.wgsl; `amt`/`p2` label the two generic
+// 0..1 knobs (p2 omitted = single-control filter). ★ ones react to audio/time.
+const FILTERS: { id: FilterKind; label: string; amt: string; p2?: string }[] = [
+  { id: 'none', label: 'Off', amt: '' },
+  { id: 'invert', label: 'Invert', amt: 'AMT' },
+  { id: 'hue', label: 'Hue Shift', amt: 'ROT' },
+  { id: 'posterize', label: 'Posterize', amt: 'STEP' },
+  { id: 'pixelate', label: 'Pixelate', amt: 'SIZE' },
+  { id: 'scanlines', label: 'Scanlines', amt: 'AMT', p2: 'DENS' },
+  { id: 'edge', label: 'Edge', amt: 'MIX', p2: 'WIDTH' },
+  { id: 'rgbSplit', label: 'RGB Split', amt: 'AMT', p2: 'ANGLE' },
+  { id: 'kaleido', label: 'Kaleido', amt: 'SEG', p2: 'ROT' },
+  { id: 'swirl', label: 'Swirl', amt: 'AMT', p2: 'RAD' },
+  { id: 'blur', label: 'Blur', amt: 'AMT' },
+  { id: 'lumaKey', label: 'Luma Key', amt: 'THR', p2: 'SOFT' },
+  { id: 'ripple', label: 'Ripple', amt: 'AMT', p2: 'FREQ' },
+];
 
 // deck types with a real light rig (only sprites are unlit)
 const LIT_SOURCES: SourceType[] = ['model', 'landscape', 'scene'];
@@ -72,6 +93,12 @@ interface DeckModuleProps {
   sourceType: SourceType;
   fx: ChannelFx;
   onFxChange: <K extends keyof ChannelFx>(channel: number, key: K, value: ChannelFx[K]) => void;
+  filter: ChannelFilter;
+  onFilterChange: <K extends keyof ChannelFilter>(
+    channel: number,
+    key: K,
+    value: ChannelFilter[K],
+  ) => void;
   aut: AutomationMap;
   onAutChange: (
     channel: number,
@@ -108,6 +135,8 @@ export function DeckModule({
   sourceType,
   fx,
   onFxChange,
+  filter,
+  onFilterChange,
   aut,
   onAutChange,
   onGenerate,
@@ -143,6 +172,8 @@ export function DeckModule({
   // LIGHT only exists for lit deck types; fall back if the source changes
   const tabs = LIT_SOURCES.includes(sourceType) ? [...TABS, 'LIGHT'] : TABS;
   const effectiveTab = tabs.includes(tab) ? tab : 'XFRM';
+
+  const activeFilter = FILTERS.find((f) => f.id === filter.kind) ?? FILTERS[0];
 
 
   // current channel values normalized into lane space, to seed new lanes
@@ -440,6 +471,51 @@ export function DeckModule({
               format={(v) => v.toFixed(2)}
               onChange={(v) => onFxChange(index, 'sat', v)}
             />
+          </>
+        )}
+
+        {effectiveTab === 'FILTER' && (
+          <>
+            <div className="flex flex-col items-center gap-1">
+              <select
+                value={filter.kind}
+                onChange={(e) => onFilterChange(index, 'kind', e.target.value as FilterKind)}
+                title="Post filter applied to this deck's visible output"
+                aria-label={`Deck ${index + 1} filter`}
+                className="max-w-[5.5rem] rounded border border-neutral-700 bg-neutral-950 px-1 py-1 text-[10px] text-neutral-300 focus:border-cyan-500 focus:outline-none"
+              >
+                {FILTERS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[8px] font-bold tracking-wider text-neutral-500">FILTER</span>
+            </div>
+            {filter.kind !== 'none' && (
+              <>
+                <Knob
+                  label={activeFilter.amt}
+                  value={filter.amount}
+                  min={0}
+                  max={1}
+                  defaultValue={0.5}
+                  format={(v) => `${Math.round(v * 100)}%`}
+                  onChange={(v) => onFilterChange(index, 'amount', v)}
+                />
+                {activeFilter.p2 && (
+                  <Knob
+                    label={activeFilter.p2}
+                    value={filter.param2}
+                    min={0}
+                    max={1}
+                    defaultValue={0.5}
+                    format={(v) => `${Math.round(v * 100)}%`}
+                    onChange={(v) => onFilterChange(index, 'param2', v)}
+                  />
+                )}
+              </>
+            )}
           </>
         )}
 

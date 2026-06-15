@@ -7,7 +7,8 @@ use std::f32::consts::PI;
 
 use super::math3d;
 use super::params::{
-    DeckDraw, EvaluatedFrame, FlightDraw, ModelDraw, Slot, SlotFrame, SpriteDraw, SLOT_COUNT,
+    filter_kind_index, DeckDraw, EvaluatedFrame, FilterFrame, FlightDraw, ModelDraw, Slot,
+    SlotFrame, SpriteDraw, SLOT_COUNT,
 };
 use super::state::{AutMap, LanePoint, LoopState, RenderStateMsg, SlotState};
 
@@ -335,6 +336,13 @@ impl Evaluator {
             frame.slots[i] = SlotFrame {
                 uniforms: slot,
                 draw,
+                // Filters are a post pass on the deck's output — passed through
+                // verbatim; the shader reads time/audio for its own animation.
+                filter: FilterFrame {
+                    kind: filter_kind_index(&s.filter.kind),
+                    amount: s.filter.amount,
+                    param2: s.filter.param2,
+                },
             };
         }
         frame

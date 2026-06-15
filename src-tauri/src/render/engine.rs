@@ -838,6 +838,19 @@ pub(crate) struct GpuCore {
     sampler: wgpu::Sampler,
     comp_uniform: wgpu::Buffer,
     comp_bind_group: wgpu::BindGroup,
+
+    // per-deck post filters (src/render/filter.wgsl): one fullscreen pass per
+    // deck writes deck_filter_textures, which the compositor samples (via
+    // comp_filtered_bind_group) instead of the raw decks when any filter is on.
+    comp_filtered_bind_group: wgpu::BindGroup,
+    /// Held only to keep the filtered targets alive (the views borrow them).
+    _deck_filter_textures: Vec<wgpu::Texture>,
+    deck_filter_views: Vec<wgpu::TextureView>,
+    filter_bind_layout: wgpu::BindGroupLayout,
+    filter_pipeline: wgpu::RenderPipeline,
+    filter_uniforms: Vec<wgpu::Buffer>,
+    filter_bind_groups: Vec<wgpu::BindGroup>,
+
     scene_target: ReadTarget,
     preview_target: ReadTarget,
 }
@@ -886,6 +899,14 @@ impl GpuCore {
         });
         if let Some(err) = tauri::async_runtime::block_on(scope.pop()) {
             return Err(format!("glow shader failed to compile: {err}"));
+        }
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let filter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vizzy-filter"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("filter.wgsl"))),
+        });
+        if let Some(err) = tauri::async_runtime::block_on(scope.pop()) {
+            return Err(format!("filter shader failed to compile: {err}"));
         }
 
         let deck_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1331,6 +1352,92 @@ impl GpuCore {
             ),
         };
 
+        // Per-deck filter pass: sampler + raw deck source + the filter uniform
+        // (kind/amount/param2) + the deck's resolution/time/audio uniform.
+        let filter_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vizzy-filter-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(32),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let filter_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("vizzy-filter-layout"),
+                bind_group_layouts: &[Some(&filter_bind_layout)],
+                immediate_size: 0,
+            });
+        let filter_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vizzy-filter-pipeline"),
+            layout: Some(&filter_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_filter"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_filter"),
+                compilation_options: Default::default(),
+                // Deck targets are Rgba8Unorm; the pass overwrites every texel.
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let filter_uniforms: Vec<_> = (0..SLOT_COUNT)
+            .map(|i| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("vizzy-filter-uniform-{i}")),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+
         let sprite_uniforms: Vec<_> = (0..SLOT_COUNT)
             .map(|i| {
                 device.create_buffer(&wgpu::BufferDescriptor {
@@ -1410,6 +1517,25 @@ impl GpuCore {
             &comp_uniform,
             &deck_views,
         );
+        let (deck_filter_textures, deck_filter_views) =
+            Self::build_filter_textures(&device, deck_size);
+        let filter_bind_groups = Self::build_filter_bind_groups(
+            &device,
+            &filter_bind_layout,
+            &sampler,
+            &deck_views,
+            &filter_uniforms,
+            &deck_uniforms,
+        );
+        // The compositor reads these filtered targets in place of the raw decks
+        // on frames where any deck has a filter active.
+        let comp_filtered_bind_group = Self::build_comp_bind_group(
+            &device,
+            &comp_bind_layout,
+            &sampler,
+            &comp_uniform,
+            &deck_filter_views,
+        );
         let master_target = Self::make_master_target(&device, DEFAULT_MASTER_SIZE);
         let master_bind_group =
             Self::make_blit_bind_group(&device, &blit_bind_layout, &sampler, &master_target.view);
@@ -1464,6 +1590,13 @@ impl GpuCore {
             sampler,
             comp_uniform,
             comp_bind_group,
+            comp_filtered_bind_group,
+            _deck_filter_textures: deck_filter_textures,
+            deck_filter_views,
+            filter_bind_layout,
+            filter_pipeline,
+            filter_uniforms,
+            filter_bind_groups,
             scene_target,
             preview_target,
         })
@@ -1756,6 +1889,78 @@ impl GpuCore {
         })
     }
 
+    /// Per-deck filter intermediates: the compositor samples these instead of
+    /// the raw deck targets on frames where a filter is active. Rebuilt with the
+    /// deck size (alongside build_deck_textures).
+    fn build_filter_textures(
+        device: &wgpu::Device,
+        size: (u32, u32),
+    ) -> (Vec<wgpu::Texture>, Vec<wgpu::TextureView>) {
+        let mut textures = Vec::with_capacity(SLOT_COUNT);
+        let mut views = Vec::with_capacity(SLOT_COUNT);
+        for i in 0..SLOT_COUNT {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("vizzy-deck-filter-{i}")),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                // COPY_SRC so tests can read a filtered deck target back.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            views.push(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            textures.push(texture);
+        }
+        (textures, views)
+    }
+
+    /// The per-deck filter bind groups (sampler + raw deck source + filter
+    /// uniform + the deck's resolution/time/audio uniform). Rebuilt whenever the
+    /// deck views change, since they borrow `deck_views`.
+    fn build_filter_bind_groups(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        deck_views: &[wgpu::TextureView],
+        filter_uniforms: &[wgpu::Buffer],
+        deck_uniforms: &[wgpu::Buffer],
+    ) -> Vec<wgpu::BindGroup> {
+        (0..SLOT_COUNT)
+            .map(|i| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("vizzy-filter-bg-{i}")),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&deck_views[i]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: filter_uniforms[i].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: deck_uniforms[i].as_entire_binding(),
+                        },
+                    ],
+                })
+            })
+            .collect()
+    }
+
     fn make_read_target(device: &wgpu::Device, label: &str, size: (u32, u32)) -> ReadTarget {
         let (width, height) = size;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1853,6 +2058,25 @@ impl GpuCore {
             &self.sampler,
             &self.comp_uniform,
             &self.deck_views,
+        );
+        let (filter_textures, filter_views) =
+            Self::build_filter_textures(&self.device, self.deck_size);
+        self._deck_filter_textures = filter_textures;
+        self.deck_filter_views = filter_views;
+        self.filter_bind_groups = Self::build_filter_bind_groups(
+            &self.device,
+            &self.filter_bind_layout,
+            &self.sampler,
+            &self.deck_views,
+            &self.filter_uniforms,
+            &self.deck_uniforms,
+        );
+        self.comp_filtered_bind_group = Self::build_comp_bind_group(
+            &self.device,
+            &self.comp_bind_layout,
+            &self.sampler,
+            &self.comp_uniform,
+            &self.deck_filter_views,
         );
     }
 
@@ -2375,6 +2599,12 @@ impl GpuCore {
             let uniform = pack_deck_uniform(dw as f32, dh as f32, time, slot.uniforms.audio);
             self.queue
                 .write_buffer(&self.deck_uniforms[i], 0, &floats_to_bytes(&uniform));
+            let f = slot.filter;
+            self.queue.write_buffer(
+                &self.filter_uniforms[i],
+                0,
+                &floats_to_bytes(&[f.kind as f32, f.amount, f.param2, 0.0]),
+            );
 
             // The evaluated draw picks what to render, the staged content
             // supplies the resources; a mismatch (frame in flight during a
@@ -2566,6 +2796,39 @@ impl GpuCore {
             }
         }
 
+        // Per-deck post filters: one fullscreen pass per deck (kind 0 passes
+        // through), but only when something is actually filtered — otherwise the
+        // compositor samples the raw decks and these passes are skipped entirely.
+        let any_filter = frame.slots.iter().any(|s| s.filter.kind != 0);
+        if any_filter {
+            for i in 0..SLOT_COUNT {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("vizzy-filter-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.deck_filter_views[i],
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.filter_pipeline);
+                pass.set_bind_group(0, &self.filter_bind_groups[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        let comp_bg = if any_filter {
+            &self.comp_filtered_bind_group
+        } else {
+            &self.comp_bind_group
+        };
+
         for (target, pipeline) in [
             (&self.scene_target, &self.scene_pipeline),
             (&self.preview_target, &self.preview_pipeline),
@@ -2587,7 +2850,7 @@ impl GpuCore {
                 multiview_mask: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.comp_bind_group, &[]);
+            pass.set_bind_group(0, comp_bg, &[]);
             pass.draw(0..3, 0..1);
             drop(pass);
             encoder.copy_texture_to_buffer(
@@ -2628,7 +2891,7 @@ impl GpuCore {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.master_pipeline);
-            pass.set_bind_group(0, &self.comp_bind_group, &[]);
+            pass.set_bind_group(0, comp_bg, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -3385,6 +3648,46 @@ fn fs_patch(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{
         assert!(
             b > 180 && r < 80,
             "top-right should be blue, got r={r} b={b}"
+        );
+    }
+
+    #[test]
+    #[ignore] // needs a GPU — run locally with `cargo test -- --ignored`
+    fn gpu_invert_filter_inverts_deck_output() {
+        let mut core = boot_core();
+
+        // Fill deck 0 with solid blue via a full-target sprite.
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([0u8, 0, 255, 255]));
+        let path = std::env::temp_dir().join("vizzy-filter-invert-test.png");
+        img.save(&path).expect("test PNG saves");
+        let (rgba, w, h) = content::load_sprite_rgba(&path).expect("decodes");
+        core.stage_sprite(0, w, h, &rgba).expect("stages");
+
+        let mut frame = EvaluatedFrame::default();
+        frame.slots[0].draw = DeckDraw::Sprite(super::super::params::SpriteDraw {
+            m: [2.0, 0.0, 0.0, 2.0],
+            t: [0.0, 0.0],
+            distort: 0.0,
+            skew: 0.0,
+            opacity: 1.0,
+            visible: true,
+        });
+        // Invert at full strength: solid blue (0,0,255) must read back yellow.
+        frame.slots[0].filter = super::super::params::FilterFrame {
+            kind: super::super::params::filter_kind_index("invert"),
+            amount: 1.0,
+            param2: 0.0,
+        };
+        core.frame(&frame, 0.0, 0, 0, None);
+
+        let (dw, dh) = core.deck_size;
+        let padded = read_texture(&core, &core._deck_filter_textures[0], dw, dh);
+        let filtered = unpad_rows(&padded, dw as usize, dh as usize);
+        let o = ((dh as usize / 2) * dw as usize + dw as usize / 2) * 4;
+        let (r, g, b, a) = (filtered[o], filtered[o + 1], filtered[o + 2], filtered[o + 3]);
+        assert!(
+            r > 230 && g > 230 && b < 40 && a > 250,
+            "invert of blue should be yellow, got r={r} g={g} b={b} a={a}"
         );
     }
 

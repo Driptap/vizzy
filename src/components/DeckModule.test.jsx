@@ -24,6 +24,8 @@ const defaultProps = () => ({
   sourceType: 'shader',
   fx: { tilt: 0, contrast: 1, hue: 0, sat: 1, band: 'level', amt: 1 },
   onFxChange: vi.fn(),
+  filter: { kind: 'none', amount: 0.5, param2: 0.5 },
+  onFilterChange: vi.fn(),
   aut: Object.fromEntries(
     ['scl', 'rot', 'tlt', 'flk', 'dst', 'skw'].map((k) => [k, { amt: 0, audio: false }]),
   ),
@@ -194,6 +196,27 @@ describe('DeckModule tabs', () => {
     ['CON', 'HUE', 'SAT'].forEach((label) =>
       expect(screen.getByRole('slider', { name: label })).toBeInTheDocument(),
     );
+  });
+
+  it('FILTER tab selects a filter and shows its generic controls', () => {
+    const { onFilterChange } = renderDeck({
+      filter: { kind: 'scanlines', amount: 0.5, param2: 0.5 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'FILTER' }));
+    // scanlines exposes both generic knobs, labelled per filter
+    expect(screen.getByRole('slider', { name: 'AMT' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'DENS' })).toBeInTheDocument();
+    // picking a different filter reports the kind change
+    fireEvent.change(screen.getByRole('combobox', { name: 'Deck 1 filter' }), {
+      target: { value: 'pixelate' },
+    });
+    expect(onFilterChange).toHaveBeenCalledWith(0, 'kind', 'pixelate');
+  });
+
+  it('FILTER tab hides the controls when off', () => {
+    renderDeck({ filter: { kind: 'none', amount: 0.5, param2: 0.5 } });
+    fireEvent.click(screen.getByRole('button', { name: 'FILTER' }));
+    expect(screen.queryByRole('slider', { name: 'AMT' })).not.toBeInTheDocument();
   });
 
   it('AUT knobs and audio-couple toggles report per-effect changes', () => {
