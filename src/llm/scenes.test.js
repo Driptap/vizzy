@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSceneSpec, SCENE_SYSTEM_PROMPT } from './scenes';
+import { parseSceneSpec, SCENE_SYSTEM_PROMPT, SCENE_EXAMPLES } from './scenes';
 
 const VALID = '{"kind":"terrain","surface":"abs(sin(x*0.3))*min(1,abs(x)/8)","amplitude":3,"palette":["#ff71ce","#01cdfe","#1a0533"]}';
 
@@ -56,5 +56,28 @@ describe('SCENE_SYSTEM_PROMPT', () => {
     expect(SCENE_SYSTEM_PROMPT).toContain('"terrain" or "tunnel"');
     expect(SCENE_SYSTEM_PROMPT).toContain('smoothstep');
     expect(SCENE_SYSTEM_PROMPT).toContain('abs(x)/8'); // the corridor hint
+  });
+
+  it('guards against treating sibling fields as surface variables', () => {
+    // the "Unknown identifier amplitude" failure: amplitude is a field, not a var
+    expect(SCENE_SYSTEM_PROMPT).toContain('never write it inside surface');
+    expect(SCENE_SYSTEM_PROMPT).toMatch(/amplitude, palette, kind.*are NOT variables/);
+  });
+
+  it('embeds the worked examples for few-shot grounding', () => {
+    for (const ex of SCENE_EXAMPLES) {
+      expect(SCENE_SYSTEM_PROMPT).toContain(ex.spec.surface);
+    }
+  });
+});
+
+describe('SCENE_EXAMPLES', () => {
+  it('every example survives the same parse/compile path as model output', () => {
+    expect(SCENE_EXAMPLES.length).toBeGreaterThan(0);
+    for (const ex of SCENE_EXAMPLES) {
+      const { spec, error } = parseSceneSpec(JSON.stringify(ex.spec));
+      expect(error, `${ex.label} should compile`).toBeUndefined();
+      expect(spec.surface).toBe(ex.spec.surface);
+    }
   });
 });
