@@ -67,9 +67,12 @@ Rust tests run from `src-tauri/`: `cargo test` (plus
 
 ## Usage
 
-1. **Audio** — pick an input device in the top bar and hit *Enable Audio*.
-   Four bands (low/mid/high/level) are computed natively (cpal + FFT) and fed
-   to every deck each frame.
+1. **Audio** — pick an input device in the top bar and hit *Live*. Four bands
+   (low/mid/high/level) are computed natively (cpal + FFT) and fed to every
+   deck each frame. The **Computer audio** entry captures the system output
+   itself — WASAPI loopback on Windows, the monitor source on Linux, and a
+   virtual loopback device (BlackHole etc.) on macOS, which the entry prompts
+   you to install if it can't find one.
 2. **Generate** — type a prompt in a deck and hit *Generate*. The LLM picks a
    generator from the patch catalog, a palette, warps and audio routing;
    the engine composes it into a shader. Requests queue sequentially so decks

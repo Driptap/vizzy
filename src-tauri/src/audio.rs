@@ -21,6 +21,12 @@ const BAND_MID: (f32, f32) = (250.0, 2000.0);
 const BAND_HIGH: (f32, f32) = (2000.0, 8000.0);
 const BAND_LEVEL: (f32, f32) = (20.0, 16000.0);
 
+/// Sentinel device id for the synthetic "Computer audio" entry — capture the
+/// machine's own output. Resolved per-OS in `resolve_target`: WASAPI loopback
+/// on Windows, the PipeWire/PulseAudio monitor source on Linux, a virtual
+/// loopback device (BlackHole etc.) on macOS.
+const SYSTEM_ID: &str = "@system";
+
 #[derive(serde::Serialize, Clone)]
 pub struct AudioDevice {
     pub id: String,
@@ -112,15 +118,15 @@ fn lock_ignore_poison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[tauri::command]
 pub fn audio_list_devices() -> Result<Vec<AudioDevice>, String> {
     let host = cpal::default_host();
-    let devices = host.input_devices().map_err(|e| e.to_string())?;
-    // cpal has no stable device IDs, so the name doubles as the ID.
-    Ok(devices
-        .filter_map(|d| d.name().ok())
-        .map(|name| AudioDevice {
-            id: name.clone(),
-            label: name,
-        })
-        .collect())
+    let inputs = host.input_devices().map_err(|e| e.to_string())?;
+    // "Computer audio" first, then the real capture devices. cpal has no stable
+    // device IDs, so a name doubles as the ID.
+    let mut devices = vec![system_entry(&host)];
+    devices.extend(inputs.filter_map(|d| d.name().ok()).map(|name| AudioDevice {
+        id: name.clone(),
+        label: name,
+    }));
+    Ok(devices)
 }
 
 #[tauri::command]
@@ -194,22 +200,133 @@ fn run_stream_thread(
     }
 }
 
+/// What to open and how to configure it.
+enum CaptureTarget {
+    /// A normal capture device — opened with its default input config.
+    Input(cpal::Device),
+    /// A render endpoint opened in loopback. cpal's WASAPI backend sets the
+    /// loopback flag automatically when an input stream is built on an output
+    /// device, so it's configured with the output (render mix) format.
+    #[allow(dead_code)] // only constructed on Windows
+    Loopback(cpal::Device),
+}
+
+/// Resolve a UI device id to a concrete device plus the config to open it with.
+fn resolve_target(
+    host: &cpal::Host,
+    device_id: Option<&str>,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
+    let target = match device_id {
+        Some(SYSTEM_ID) => resolve_system(host)?,
+        Some(id) => CaptureTarget::Input(
+            host.input_devices()
+                .map_err(|e| e.to_string())?
+                .find(|d| d.name().map(|n| n == id).unwrap_or(false))
+                .or_else(|| host.default_input_device())
+                .ok_or_else(|| "no audio input device available".to_string())?,
+        ),
+        None => CaptureTarget::Input(
+            host.default_input_device()
+                .ok_or_else(|| "no audio input device available".to_string())?,
+        ),
+    };
+    match target {
+        CaptureTarget::Input(d) => {
+            let c = d.default_input_config().map_err(|e| e.to_string())?;
+            Ok((d, c))
+        }
+        CaptureTarget::Loopback(d) => {
+            let c = d.default_output_config().map_err(|e| e.to_string())?;
+            Ok((d, c))
+        }
+    }
+}
+
+/// Windows: loopback-capture the default output (WASAPI sets the loopback flag).
+#[cfg(target_os = "windows")]
+fn resolve_system(host: &cpal::Host) -> Result<CaptureTarget, String> {
+    host.default_output_device()
+        .map(CaptureTarget::Loopback)
+        .ok_or_else(|| "no output device available to capture".to_string())
+}
+
+/// macOS: CoreAudio has no native loopback, so route to a virtual loopback
+/// device (BlackHole / Loopback / an Aggregate) if the user has one installed.
+#[cfg(target_os = "macos")]
+fn resolve_system(host: &cpal::Host) -> Result<CaptureTarget, String> {
+    host.input_devices()
+        .map_err(|e| e.to_string())?
+        .find(|d| d.name().map(|n| is_mac_loopback(&n)).unwrap_or(false))
+        .map(CaptureTarget::Input)
+        .ok_or_else(|| {
+            "No loopback device found. Install BlackHole (free) — or use a Loopback/Aggregate \
+             device — to capture computer audio on macOS."
+                .to_string()
+        })
+}
+
+/// macOS virtual loopback devices appear as ordinary capture devices; match the
+/// common ones by name.
+#[cfg(target_os = "macos")]
+fn is_mac_loopback(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [
+        "blackhole",
+        "loopback",
+        "soundflower",
+        "aggregate",
+        "multi-output",
+        "vb-audio",
+        "vb-cable",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
+}
+
+/// Linux/other: PipeWire & PulseAudio expose each output's monitor as a capture
+/// source, so the system mix is just another input device.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn resolve_system(host: &cpal::Host) -> Result<CaptureTarget, String> {
+    host.input_devices()
+        .map_err(|e| e.to_string())?
+        .find(|d| {
+            d.name()
+                .map(|n| n.to_lowercase().contains("monitor"))
+                .unwrap_or(false)
+        })
+        .map(CaptureTarget::Input)
+        .ok_or_else(|| {
+            "No monitor source found. Enable a PipeWire/PulseAudio monitor for your output \
+             to capture computer audio."
+                .to_string()
+        })
+}
+
+/// The synthetic "Computer audio" entry. The label carries a short hint when
+/// system capture isn't available on this machine, so the dropdown itself tells
+/// the user what to do.
+fn system_entry(host: &cpal::Host) -> AudioDevice {
+    let label = if resolve_system(host).is_ok() {
+        "Computer audio"
+    } else if cfg!(target_os = "macos") {
+        "Computer audio (install BlackHole)"
+    } else if cfg!(target_os = "windows") {
+        "Computer audio (unavailable)"
+    } else {
+        "Computer audio (enable a monitor source)"
+    };
+    AudioDevice {
+        id: SYSTEM_ID.to_string(),
+        label: label.to_string(),
+    }
+}
+
 fn build_stream(
     device_id: Option<String>,
     ring: Arc<Mutex<Ring>>,
 ) -> Result<(cpal::Stream, u32), String> {
     let host = cpal::default_host();
-    let device = match device_id {
-        Some(ref id) => host
-            .input_devices()
-            .map_err(|e| e.to_string())?
-            .find(|d| d.name().map(|n| n == *id).unwrap_or(false))
-            .or_else(|| host.default_input_device()),
-        None => host.default_input_device(),
-    }
-    .ok_or_else(|| "no audio input device available".to_string())?;
-
-    let config = device.default_input_config().map_err(|e| e.to_string())?;
+    let (device, config) = resolve_target(&host, device_id.as_deref())?;
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let stream_config: cpal::StreamConfig = config.config();
@@ -372,6 +489,16 @@ mod tests {
         let bins = [1.0f32; NUM_BINS];
         // 30 kHz at 48 kHz: start bin 320 > clamped end bin 255 -> empty -> 0.
         assert_eq!(band_average(&bins, 48000, 30000.0, 40000.0), 0.0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detects_mac_loopback_devices() {
+        assert!(is_mac_loopback("BlackHole 2ch"));
+        assert!(is_mac_loopback("Loopback Audio"));
+        assert!(is_mac_loopback("My Aggregate Device"));
+        assert!(!is_mac_loopback("MacBook Pro Microphone"));
+        assert!(!is_mac_loopback("External Headphones"));
     }
 
     #[test]
