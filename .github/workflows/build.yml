@@ -44,13 +44,25 @@ jobs:
       - name: System deps (Tauri webview, cpal audio, midir udev)
         if: runner.os == 'Linux'
         run: |
-          # The hosted runner ships Microsoft/Azure apt repos we don't use;
-          # they intermittently 403 / lose signing and fail `apt-get update`.
+          # The hosted runner's apt points at Azure mirrors (via the mirrorlist
+          # in /etc/apt/apt-mirrors.txt) plus a Microsoft prod repo we don't
+          # use. They drift out of sync — serving a libgstreamer1.0-dev whose
+          # libunwind-dev dependency can't be satisfied ("held broken
+          # packages") — so drop the Microsoft repo and rewrite the Azure mirror
+          # to the canonical Ubuntu archives. Deleting the sources.list.d entries
+          # alone misses the mirror that's actually serving packages.
           sudo find /etc/apt/sources.list.d -type f \
             \( -iname '*microsoft*' -o -iname '*azure*' \) -delete
+          azure_files=$(grep -rlE 'azure\.(archive|ports)\.ubuntu\.com' /etc/apt 2>/dev/null || true)
+          if [ -n "$azure_files" ]; then
+            sudo sed -i \
+              -e 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+              -e 's|azure.ports.ubuntu.com|ports.ubuntu.com|g' \
+              $azure_files
+          fi
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            librsvg2-dev libasound2-dev libudev-dev patchelf \
+          sudo apt-get install -y --allow-downgrades libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libasound2-dev libudev-dev patchelf libunwind-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
       - run: npm ci
