@@ -1,6 +1,6 @@
 {
   "name": "vizzy",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Vizzy — live VJ tool: LLM-generated GLSL shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled",
   "author": "Driptap",
   "license": "MIT",
