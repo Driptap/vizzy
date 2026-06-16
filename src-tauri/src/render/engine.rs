@@ -249,17 +249,16 @@ pub fn render_start(
     // asks for the desktop tier, so request_device fails outright and the
     // engine never starts. Clamping to adapter.limits() lets it come up there;
     // the per-pass code already clamps texture sizes to device limits.
-    let (device, queue) = tauri::async_runtime::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
+    let (device, queue) =
+        tauri::async_runtime::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits: adapter.limits(),
             ..Default::default()
-        },
-    ))
-    .map_err(|e| {
-        let msg = format!("GPU device request failed: {e}");
-        eprintln!("[vizzy render] {msg}");
-        msg
-    })?;
+        }))
+        .map_err(|e| {
+            let msg = format!("GPU device request failed: {e}");
+            eprintln!("[vizzy render] {msg}");
+            msg
+        })?;
     // Late validation errors (e.g. a deck shader misbehaving at draw time)
     // must never abort the process.
     device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
