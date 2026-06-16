@@ -1,6 +1,6 @@
 [package]
 name = "vizzy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Vizzy — live VJ tool: LLM-generated shaders, dual-scene 8-deck mixer, audio-reactive, MIDI-controlled"
 authors = ["Driptap"]
 license = "MIT"
