@@ -74,8 +74,15 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build app
+        env:
+          # Updater signing (tauri-plugin-updater). Without these the build
+          # still succeeds but produces no .sig files, and the updater can't
+          # verify downloads. Set both as repo secrets (private key + its
+          # password from `tauri signer generate`).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }}
-        # Unsigned builds. When signing lands:
+        # Still OS-unsigned. When OS signing lands:
         # macOS: APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY + notarytool secrets
         # Windows: AZURE_TRUSTED_SIGNING or PFX secrets
 
@@ -84,9 +91,13 @@ jobs:
           name: ${{ matrix.os }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
           if-no-files-found: error
 
   release:
@@ -107,13 +118,47 @@ jobs:
       - name: Rename bundles to the stable names the site links to
         run: |
           mkdir -p assets
-          find builds/macos-latest    -type f -name '*.dmg'      -exec cp {} assets/Vizzy-mac.dmg \;
-          find builds/windows-latest  -type f -name '*.exe'      -exec cp {} assets/Vizzy-win.exe \;
-          find builds/ubuntu-22.04     -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux.AppImage \;
-          find builds/ubuntu-22.04     -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux.deb \;
-          find builds/ubuntu-22.04-arm -type f -name '*.AppImage' -exec cp {} assets/Vizzy-linux-arm64.AppImage \;
-          find builds/ubuntu-22.04-arm -type f -name '*.deb'      -exec cp {} assets/Vizzy-linux-arm64.deb \;
+          find builds/macos-latest    -type f -name '*.dmg'         -exec cp {} assets/Vizzy-mac.dmg \;
+          # macOS updater artifact (the updater installs the .app.tar.gz, not the .dmg).
+          find builds/macos-latest    -type f -name '*.app.tar.gz'  -exec cp {} assets/Vizzy-mac.app.tar.gz \;
+          find builds/windows-latest  -type f -name '*.exe'         -exec cp {} assets/Vizzy-win.exe \;
+          find builds/ubuntu-22.04     -type f -name '*.AppImage'    -exec cp {} assets/Vizzy-linux.AppImage \;
+          find builds/ubuntu-22.04     -type f -name '*.deb'         -exec cp {} assets/Vizzy-linux.deb \;
+          find builds/ubuntu-22.04-arm -type f -name '*.AppImage'    -exec cp {} assets/Vizzy-linux-arm64.AppImage \;
+          find builds/ubuntu-22.04-arm -type f -name '*.deb'         -exec cp {} assets/Vizzy-linux-arm64.deb \;
           ls -l assets
+
+      - name: Generate updater manifest (latest.json)
+        run: |
+          base=https://github.com/Driptap/vizzy/releases/latest/download
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # The signature stored in latest.json is the verbatim content of each
+          # bundle's .sig file (produced by createUpdaterArtifacts + the signing
+          # key). Missing legs are skipped so a partial build still publishes.
+          sig() { local f; f=$(find "$1" -type f -name "$2" | head -1); [ -n "$f" ] && cat "$f" || true; }
+          mac_sig=$(sig builds/macos-latest    '*.app.tar.gz.sig')
+          win_sig=$(sig builds/windows-latest  '*-setup.exe.sig')
+          lx64_sig=$(sig builds/ubuntu-22.04     '*.AppImage.sig')
+          larm_sig=$(sig builds/ubuntu-22.04-arm '*.AppImage.sig')
+
+          platforms='{}'
+          add() { # key url sig
+            [ -z "$3" ] && return 0
+            platforms=$(echo "$platforms" | jq --arg k "$1" --arg u "$2" --arg s "$3" \
+              '. + {($k): {url: $u, signature: $s}}')
+          }
+          add darwin-aarch64 "$base/Vizzy-mac.app.tar.gz"        "$mac_sig"
+          add windows-x86_64 "$base/Vizzy-win.exe"               "$win_sig"
+          add linux-x86_64   "$base/Vizzy-linux.AppImage"        "$lx64_sig"
+          add linux-aarch64  "$base/Vizzy-linux-arm64.AppImage"  "$larm_sig"
+
+          jq -n --arg v "$version" --arg d "$pub_date" \
+            --arg notes "Automated build of ${{ github.sha }}." \
+            --argjson platforms "$platforms" \
+            '{version: $v, notes: $notes, pub_date: $d, platforms: $platforms}' \
+            > assets/latest.json
+          cat assets/latest.json
 
       - name: Update rolling "latest" release
         env:

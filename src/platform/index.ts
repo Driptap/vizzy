@@ -1,7 +1,7 @@
 import type { Platform } from './types';
 import { createTauriPlatform } from './tauri';
 
-export type { Platform, OllamaStatus, OllamaProgress } from './types';
+export type { Platform, OllamaStatus, OllamaProgress, UpdateInfo } from './types';
 export { joinPath, extname } from './types';
 
 export const isTauri = (): boolean =>
@@ -16,6 +16,7 @@ const unavailable = (): Promise<never> =>
 function createBrowserPlatform(): Platform {
   return {
     kind: 'browser',
+    appVersion: async () => 'dev',
     dirs: {
       userData: unavailable,
       shaders: unavailable,
@@ -43,6 +44,10 @@ function createBrowserPlatform(): Platform {
       status: unavailable,
       install: unavailable,
       start: unavailable,
+    },
+    updater: {
+      check: async () => null,
+      install: unavailable,
     },
   };
 }

@@ -3,9 +3,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { appDataDir } from '@tauri-apps/api/path';
+import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import * as tfs from '@tauri-apps/plugin-fs';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { check as checkUpdate, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import type { Platform, OllamaProgress } from './types';
 import { joinPath } from './types';
 
@@ -30,6 +33,7 @@ export function createTauriPlatform(): Platform {
 
   return {
     kind: 'tauri',
+    appVersion: () => getVersion(),
     dirs: {
       userData,
       shaders: ensuredDir('shaders'),
@@ -112,5 +116,30 @@ export function createTauriPlatform(): Platform {
       },
       start: () => invoke('ollama_start'),
     },
+    updater: (() => {
+      // check() returns an Update handle that downloadAndInstall() needs; hold
+      // the last one so the UI can split "is there an update?" from "install it".
+      let pending: Update | null = null;
+      return {
+        check: async () => {
+          pending = await checkUpdate();
+          if (!pending) return null;
+          return { version: pending.version, notes: pending.body, date: pending.date };
+        },
+        install: async (onProgress) => {
+          if (!pending) throw new Error('No update pending — call check() first');
+          let total = 0;
+          let received = 0;
+          await pending.downloadAndInstall((e) => {
+            if (e.event === 'Started') total = e.data.contentLength ?? 0;
+            else if (e.event === 'Progress') {
+              received += e.data.chunkLength;
+              if (total > 0) onProgress?.(received / total);
+            } else if (e.event === 'Finished') onProgress?.(1);
+          });
+          await relaunch();
+        },
+      };
+    })(),
   };
 }

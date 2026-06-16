@@ -16,12 +16,15 @@
     "typecheck": "tsc --noEmit",
     "guide:shots": "node scripts/shoot-guide.mjs",
     "model:pull": "ollama pull qwen2.5-coder",
-    "dist": "tauri build"
+    "dist": "tauri build",
+    "bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-process": "^2.3.0",
+    "@tauri-apps/plugin-updater": "^2.9.0",
     "fflate": "^0.8.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

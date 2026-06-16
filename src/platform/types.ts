@@ -15,6 +15,15 @@ export interface OllamaProgress {
   total?: number;
 }
 
+export interface UpdateInfo {
+  /** The version offered by the update manifest (strictly newer than running). */
+  version: string;
+  /** Release notes from the manifest, if any. */
+  notes?: string;
+  /** Publish date (ISO) from the manifest, if any. */
+  date?: string;
+}
+
 export interface PlatformDirs {
   userData(): Promise<string>;
   /** Library dirs are created on first use. */
@@ -42,6 +51,8 @@ export interface Platform {
   kind: 'tauri' | 'browser';
   dirs: PlatformDirs;
   fs: PlatformFs;
+  /** The running app's version (from the bundle), or 'dev' in the browser. */
+  appVersion(): Promise<string>;
   /**
    * Last-gasp write for beforeunload: fire-and-forget — the IPC message is
    * posted before the page unloads and the Rust side outlives the webview
@@ -75,6 +86,20 @@ export interface Platform {
     status(): Promise<OllamaStatus>;
     install(onProgress: (p: OllamaProgress) => void): Promise<void>;
     start(): Promise<boolean>;
+  };
+  updater: {
+    /**
+     * Query the update endpoint. Returns the available update's metadata, or
+     * null when the app is current / the host has no updater (plain browser).
+     * The pending update is held internally for a following install() call.
+     */
+    check(): Promise<UpdateInfo | null>;
+    /**
+     * Download + apply the update found by the last check(), reporting download
+     * progress as a 0..1 fraction, then relaunch the app. Rejects if no update
+     * is pending.
+     */
+    install(onProgress?: (fraction: number) => void): Promise<void>;
   };
 }
 

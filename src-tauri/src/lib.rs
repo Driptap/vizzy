@@ -3,8 +3,29 @@ mod midi;
 mod ollama;
 mod render;
 
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+
+// The Updates window: a small webview loading the same bundle with a #updater
+// hash so the renderer mounts <UpdaterWindow> instead of <App>. Opened from the
+// tray (menu bar) entry; reused/refocused if already open.
+fn show_updater_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("updater") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(
+        app,
+        "updater",
+        tauri::WebviewUrl::App("index.html#updater".into()),
+    )
+    .title("Vizzy — Updates")
+    .inner_size(420.0, 320.0)
+    .resizable(false)
+    .build();
+}
 
 // Builds the native application menu. The custom File items carry stable ids
 // the on_menu_event handler forwards to the renderer as `vizzy://menu`
@@ -18,6 +39,8 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
     let reset = MenuItemBuilder::with_id("menu_reset_app", "Reset App…").build(app)?;
+    let check_updates =
+        MenuItemBuilder::with_id("menu_check_updates", "Check for Updates…").build(app)?;
 
     let edit = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -33,6 +56,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     {
         let app_menu = SubmenuBuilder::new(app, "Vizzy")
             .about(None)
+            .item(&check_updates)
             .separator()
             .services()
             .separator()
@@ -71,6 +95,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             .item(&save)
             .separator()
             .item(&reset)
+            .item(&check_updates)
             .separator()
             .quit()
             .build()?;
@@ -92,6 +117,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        // In-app autoupdate (tauri-plugin-updater) + relaunch after install
+        // (tauri-plugin-process). The JS side drives the check/install via the
+        // platform layer; config + signing pubkey live in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(audio::AudioState::default())
         .manage(midi::MidiState::default())
         .manage(ollama::OllamaState::default())
@@ -99,6 +129,35 @@ pub fn run() {
         .setup(|app| {
             let menu = build_app_menu(app.handle())?;
             app.handle().set_menu(menu)?;
+
+            // Tray (menu bar) entry: left-click opens the Updates window; the
+            // right-click menu gives an explicit Open + Quit for platforms where
+            // left-click isn't a reliable activation.
+            let tray_open =
+                MenuItem::with_id(app, "tray_open", "Open Updates", true, None::<&str>)?;
+            let tray_quit = MenuItem::with_id(app, "tray_quit", "Quit Vizzy", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&tray_open, &tray_quit])?;
+            TrayIconBuilder::with_id("vizzy-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Vizzy")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray_open" => show_updater_window(app),
+                    "tray_quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_updater_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -106,6 +165,7 @@ pub fn run() {
                 "menu_open_workspace" => "open-workspace",
                 "menu_save_workspace" => "save-workspace",
                 "menu_reset_app" => "reset-app",
+                "menu_check_updates" => "check-updates",
                 _ => return,
             };
             let _ = app.emit("vizzy://menu", action);

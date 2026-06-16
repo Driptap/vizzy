@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Vizzy main window: app-data file access plus core IPC/events",
-  "windows": ["main"],
+  "windows": ["main", "updater"],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -16,6 +16,8 @@
     "fs:allow-exists",
     "fs:allow-remove",
     "fs:allow-copy-file",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "$APPDATA" }, { "path": "$APPDATA/**" }]

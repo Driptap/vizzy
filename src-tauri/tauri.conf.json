@@ -24,9 +24,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Driptap/vizzy/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJEQjJFNzQ0NDYxQzY5RUIKUldUcmFSeEdST2V5dlZsZ2NMbEFUck14TEx3YmZuanVZTXBaR01UdW95OS9mNGNEeEM4TWZHM3UK"
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "nsis", "appimage", "deb"],
+    "createUpdaterArtifacts": true,
+    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
     "category": "Music",
     "macOS": {
       "frameworks": ["vendor/Syphon.framework"]

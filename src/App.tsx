@@ -21,6 +21,8 @@ import { useAudioControls } from './hooks/useAudioControls';
 import { useAudioMeters } from './hooks/useAudioMeters';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
 import { useLibrary, isShaderEntry } from './hooks/useLibrary';
+import { useUpdater } from './hooks/useUpdater';
+import { UpdateBanner } from './components/UpdateBanner';
 import { getPlatform } from './platform';
 
 export default function App() {
@@ -36,6 +38,7 @@ export default function App() {
 
   const perf = usePerformanceState();
   const llm = useLlmSetup();
+  const updater = useUpdater();
 
   const rig = useEngineRig({
     sceneACanvasRef,
@@ -145,13 +148,15 @@ export default function App() {
   // Native File menu (built in src-tauri): the OS menu items emit actions the
   // host forwards here, driving the same workspace handlers the UI used to.
   const { handleImportWorkspace, handleExportWorkspace, handleResetToDefaults } = library;
+  const { checkNow: checkForUpdates } = updater;
   useEffect(() => {
     return getPlatform().onMenuAction((action) => {
       if (action === 'open-workspace') void handleImportWorkspace();
       else if (action === 'save-workspace') void handleExportWorkspace();
       else if (action === 'reset-app') void handleResetToDefaults();
+      else if (action === 'check-updates') void checkForUpdates();
     });
-  }, [handleImportWorkspace, handleExportWorkspace, handleResetToDefaults]);
+  }, [handleImportWorkspace, handleExportWorkspace, handleResetToDefaults, checkForUpdates]);
 
   // Saved decks the performance view can cue, and the cue handler (loads a deck
   // onto a scene's 4 channels via the existing library path).
@@ -368,6 +373,7 @@ export default function App() {
 
       <Tutorial open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
       <WorkspaceProgress progress={library.exportProgress} />
+      <UpdateBanner state={updater.state} onInstall={updater.install} onDismiss={updater.dismiss} />
     </div>
   );
 }
