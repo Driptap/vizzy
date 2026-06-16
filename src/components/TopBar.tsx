@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { MODEL_CATALOG } from '../llm/models';
 import { AudioMeterStrip } from './AudioMeterStrip';
 import type { MeterStore } from '../hooks/useAudioMeters';
@@ -36,8 +36,6 @@ interface TopBarProps {
   onTogglePerf: () => void;
   syphonOn: boolean;
   onToggleSyphon: () => void;
-  glowOn: boolean;
-  onToggleGlow: () => void;
   audioActive: boolean;
   audioDevices: MediaDeviceInfo[];
   selectedDevice: string;
@@ -52,12 +50,11 @@ interface TopBarProps {
   onToggleMidiLearn: () => void;
   midiInputs: number;
   onOpenTutorial: () => void;
-  onResetRig: () => void;
-  bpm: number;
-  onBpmChange: (bpm: number) => void;
   meterStore: MeterStore;
   meterPanelOpen: boolean;
   onToggleMeterPanel: () => void;
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
 }
 
 export function TopBar({
@@ -69,8 +66,6 @@ export function TopBar({
   onTogglePerf,
   syphonOn,
   onToggleSyphon,
-  glowOn,
-  onToggleGlow,
   audioActive,
   audioDevices,
   selectedDevice,
@@ -85,31 +80,16 @@ export function TopBar({
   onToggleMidiLearn,
   midiInputs,
   onOpenTutorial,
-  onResetRig,
-  bpm,
-  onBpmChange,
   meterStore,
   meterPanelOpen,
   onToggleMeterPanel,
+  settingsOpen,
+  onToggleSettings,
 }: TopBarProps) {
   const inCatalog = MODEL_CATALOG.some((m) => m.tag === model);
   const [customMode, setCustomMode] = useState(!inCatalog);
   const showCustom = customMode || !inCatalog;
 
-  // two-click confirm: a stray click mid-set must never wipe the rig
-  const [resetArmed, setResetArmed] = useState(false);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(resetTimerRef.current), []);
-  const handleResetClick = () => {
-    if (resetArmed) {
-      clearTimeout(resetTimerRef.current);
-      setResetArmed(false);
-      onResetRig();
-      return;
-    }
-    setResetArmed(true);
-    resetTimerRef.current = setTimeout(() => setResetArmed(false), 3000);
-  };
   return (
     <div className="flex items-center gap-4 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
       <h1 className="text-sm font-black tracking-widest text-cyan-400">
@@ -153,16 +133,6 @@ export function TopBar({
       >
         <StatusDot on={syphonOn} />
         {SHARE_PROTOCOL}
-      </button>
-
-      <button
-        type="button"
-        onClick={onToggleGlow}
-        title="Soft bloom on the master output — bright areas spill a tasteful stage glow"
-        className={`${TOGGLE_BASE} ${glowOn ? 'bg-violet-600 text-white hover:bg-violet-500' : TOGGLE_OFF}`}
-      >
-        <StatusDot on={glowOn} />
-        Glow
       </button>
 
       <div className="ml-4 flex items-center gap-2">
@@ -239,30 +209,6 @@ export function TopBar({
           expanded={meterPanelOpen}
           onToggle={onToggleMeterPanel}
         />
-        <div className="flex items-center gap-1" title="Global tempo — drives every deck's looper">
-          <span className="text-[10px] uppercase tracking-wider text-neutral-500">BPM</span>
-          <input
-            type="number"
-            min={40}
-            max={220}
-            value={bpm}
-            onChange={(e) => onBpmChange(Number(e.target.value))}
-            aria-label="Tempo in BPM"
-            className="w-14 rounded border border-neutral-700 bg-neutral-950 px-1.5 py-1 text-center text-xs text-neutral-300 focus:border-cyan-500 focus:outline-none"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={handleResetClick}
-          title="Clear all decks and the mixer back to defaults — the library is untouched"
-          className={`${TOGGLE_BASE} min-w-[8.5rem] ${
-            resetArmed
-              ? 'bg-red-600 text-white hover:bg-red-500'
-              : 'bg-neutral-700 text-neutral-200 hover:bg-red-900/70 hover:text-red-200'
-          }`}
-        >
-          {resetArmed ? 'Sure? Click again' : 'Reset Rig'}
-        </button>
         <span className="text-[10px] text-neutral-500">
           {midiInputs > 0 ? `${midiInputs} MIDI in` : 'No MIDI'}
         </span>
@@ -274,6 +220,19 @@ export function TopBar({
         >
           <StatusDot on={midiLearn} />
           MIDI Learn
+        </button>
+        <button
+          type="button"
+          onClick={onToggleSettings}
+          title="Settings — render resolution and performance"
+          aria-label="Settings"
+          className={`flex h-6 w-6 items-center justify-center rounded-full text-xs transition-colors ${
+            settingsOpen
+              ? 'bg-cyan-600 text-white'
+              : 'bg-neutral-700 text-neutral-200 hover:bg-cyan-600 hover:text-white'
+          }`}
+        >
+          ⚙
         </button>
         <button
           type="button"

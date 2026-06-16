@@ -19,6 +19,7 @@ vi.mock('./engine/NativeRenderEngine', () => {
       this.setTile = vi.fn();
       this.setLoop = vi.fn();
       this.setBpm = vi.fn();
+      this.setRenderCap = vi.fn();
       this.resetAllDecks = vi.fn();
       this.setChannelFx = vi.fn();
       this.setAudioRouting = vi.fn();
@@ -160,6 +161,26 @@ vi.mock('./components/SetupScreen', () => ({
     </div>
   ),
 }));
+
+// Capture the native-menu callback so tests can fire menu actions (Reset Rig
+// moved off the top bar into the OS menu). Everything else delegates to the
+// real browser platform.
+const menuHook = vi.hoisted(() => ({ cb: null }));
+vi.mock('./platform', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getPlatform: () => ({
+      ...actual.getPlatform(),
+      onMenuAction: (cb) => {
+        menuHook.cb = cb;
+        return () => {
+          menuHook.cb = null;
+        };
+      },
+    }),
+  };
+});
 
 import App from './App';
 import { __engines } from './engine/NativeRenderEngine';
@@ -442,27 +463,14 @@ describe('layering', () => {
 });
 
 describe('looper', () => {
-  it('BPM edits and loop play state reach the engine for the cued slot', async () => {
+  it('loop play state reaches the engine for the cued slot', async () => {
     await renderApp();
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tempo in BPM' }), {
-      target: { value: '140' },
-    });
-    await waitFor(() => expect(engine().setBpm).toHaveBeenCalledWith(140));
-
     fireEvent.click(screen.getAllByRole('button', { name: 'LOOP' })[2]); // deck A3's tab
     engine().setLoop.mockClear();
     fireEvent.click(screen.getByRole('button', { name: '▶' }));
     await waitFor(() =>
       expect(engine().setLoop).toHaveBeenCalledWith(2, expect.objectContaining({ playing: true })),
     );
-  });
-
-  it('BPM is clamped to a sane musical range', async () => {
-    await renderApp();
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tempo in BPM' }), {
-      target: { value: '9999' },
-    });
-    await waitFor(() => expect(engine().setBpm).toHaveBeenCalledWith(220));
   });
 });
 
@@ -672,7 +680,7 @@ describe('landscape restore', () => {
 });
 
 describe('reset rig', () => {
-  it('confirmed reset blanks the decks and mixer but never touches the library', async () => {
+  it('the Reset Rig menu action blanks the decks and mixer but never touches the library', async () => {
     await renderApp();
     // dirty the rig: a prompt, a staged shader, a hot fader, a moved crossfader
     fireEvent.change(deckPrompt(0), { target: { value: 'about to vanish' } });
@@ -686,8 +694,7 @@ describe('reset rig', () => {
     });
     expect(await screen.findByText('Active')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Sure? Click again' }));
+    act(() => menuHook.cb('reset-rig'));
 
     expect(engine().resetAllDecks).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(deckPrompt(0)).toHaveValue(''));
@@ -697,14 +704,6 @@ describe('reset rig', () => {
     expect(screen.queryByText('Active')).not.toBeInTheDocument(); // statuses back to idle
     // library operations were never invoked
     expect(deleteEntry).not.toHaveBeenCalled();
-  });
-
-  it('a single unconfirmed click does nothing', async () => {
-    await renderApp();
-    fireEvent.change(deckPrompt(0), { target: { value: 'still here' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Rig' }));
-    expect(engine().resetAllDecks).not.toHaveBeenCalled();
-    expect(deckPrompt(0)).toHaveValue('still here');
   });
 });
 

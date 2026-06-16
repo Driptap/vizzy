@@ -102,6 +102,19 @@ export function createTauriPlatform(): Platform {
         unlisten?.();
       };
     },
+    window: {
+      isFullscreen: () => invoke<boolean>('window_is_fullscreen'),
+      setFullscreen: (on) => invoke<void>('window_set_fullscreen', { on }),
+      onFullscreenChange: (cb) => {
+        // The DOM resize event fires on fullscreen enter/exit (incl. Esc/WM);
+        // re-query the authoritative native state on each.
+        const handler = () => {
+          void invoke<boolean>('window_is_fullscreen').then(cb).catch(() => {});
+        };
+        window.addEventListener('resize', handler);
+        return () => window.removeEventListener('resize', handler);
+      },
+    },
     ollama: {
       status: () => invoke('ollama_status'),
       install: async (onProgress) => {

@@ -3,6 +3,12 @@ import type { DeckEntry, ModelEntry, SceneEntry, SpriteEntry, VideoEntry } from 
 import { CHANNELS, SCENE_LETTERS, slotIndex } from './lib/channels';
 import { TopBar } from './components/TopBar';
 import { AudioMeterPanel } from './components/AudioMeterPanel';
+import { SettingsPanel } from './components/SettingsPanel';
+import {
+  loadRenderResolution,
+  saveRenderResolution,
+  type RenderResolution,
+} from './lib/renderSettings';
 import { BpmSyncBridge } from './components/BpmSyncBridge';
 import { Tutorial } from './components/Tutorial';
 import { WorkspaceProgress } from './components/WorkspaceProgress';
@@ -69,6 +75,17 @@ export default function App() {
   const [meterPanelOpen, setMeterPanelOpen] = useState(false);
   const toggleMeterPanel = useCallback(() => setMeterPanelOpen((v) => !v), []);
 
+  // Settings panel + the app-wide render-resolution cap (persisted, off by
+  // default). Push the cap to the engine whenever it changes; the native side
+  // renders the master no larger than the box and stretches it to the output.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [renderRes, setRenderRes] = useState<RenderResolution>(loadRenderResolution);
+  useEffect(() => {
+    saveRenderResolution(renderRes);
+    const { enabled, width, height } = renderRes;
+    engineRef.current?.setRenderCap(enabled ? width : 0, enabled ? height : 0);
+  }, [engineRef, renderRes]);
+
   // Push per-layer beat-detector tuning to the native core whenever it changes
   // or capture (re)starts — so restored settings take effect on the next session.
   useEffect(() => {
@@ -89,20 +106,6 @@ export default function App() {
       .then(setSyphonOn)
       .catch((err) => console.error('[Vizzy] Texture share failed:', err));
   }, [engineRef, syphonOn]);
-
-  // Master glow (bloom) also lives in the render core; same mirror pattern.
-  const [glowOn, setGlowOn] = useState(false);
-  useEffect(() => {
-    engineRef.current?.onGlow(setGlowOn);
-  }, [engineRef]);
-  const handleToggleGlow = useCallback(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    void engine
-      .setGlow(!glowOn)
-      .then(setGlowOn)
-      .catch((err) => console.error('[Vizzy] Glow toggle failed:', err));
-  }, [engineRef, glowOn]);
 
   const handleMidiControl = useCallback(
     (controlId: string, value: number) => {
@@ -145,6 +148,13 @@ export default function App() {
     flushSession: session.flushSession,
   });
 
+  // Blank rig: baseline shaders on every deck, neutral mixer; library intact.
+  // Lives in the native File menu (no top-bar button) — see build_app_menu.
+  const handleResetRig = useCallback(() => {
+    engineRef.current?.resetAllDecks();
+    perf.resetPerformance();
+  }, [engineRef, perf.resetPerformance]);
+
   // Native File menu (built in src-tauri): the OS menu items emit actions the
   // host forwards here, driving the same workspace handlers the UI used to.
   const { handleImportWorkspace, handleExportWorkspace, handleResetToDefaults } = library;
@@ -154,9 +164,10 @@ export default function App() {
       if (action === 'open-workspace') void handleImportWorkspace();
       else if (action === 'save-workspace') void handleExportWorkspace();
       else if (action === 'reset-app') void handleResetToDefaults();
+      else if (action === 'reset-rig') handleResetRig();
       else if (action === 'check-updates') void checkForUpdates();
     });
-  }, [handleImportWorkspace, handleExportWorkspace, handleResetToDefaults, checkForUpdates]);
+  }, [handleImportWorkspace, handleExportWorkspace, handleResetToDefaults, checkForUpdates, handleResetRig]);
 
   // Saved decks the performance view can cue, and the cue handler (loads a deck
   // onto a scene's 4 channels via the existing library path).
@@ -173,12 +184,6 @@ export default function App() {
     (channel: number, text: string) => perf.setPrompt(slotIndex(perf.cueScene, channel), text),
     [perf.setPrompt, perf.cueScene],
   );
-
-  // Blank rig: baseline shaders on every deck, neutral mixer; library intact.
-  const handleResetRig = useCallback(() => {
-    engineRef.current?.resetAllDecks();
-    perf.resetPerformance();
-  }, [engineRef, perf.resetPerformance]);
 
   const sceneLetter = SCENE_LETTERS[perf.cueScene];
 
@@ -214,8 +219,6 @@ export default function App() {
         onTogglePerf={() => setPerformanceMode((v) => !v)}
         syphonOn={syphonOn}
         onToggleSyphon={handleToggleSyphon}
-        glowOn={glowOn}
-        onToggleGlow={handleToggleGlow}
         audioActive={audio.audioActive}
         audioDevices={audio.audioDevices}
         selectedDevice={audio.selectedDevice}
@@ -230,13 +233,16 @@ export default function App() {
         onToggleMidiLearn={midi.handleToggleMidiLearn}
         midiInputs={midi.midiInputs}
         onOpenTutorial={() => setTutorialOpen(true)}
-        onResetRig={handleResetRig}
-        bpm={perf.bpm}
-        onBpmChange={perf.applyBpm}
         meterStore={meterStore}
         meterPanelOpen={meterPanelOpen}
         onToggleMeterPanel={toggleMeterPanel}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
       />
+
+      {settingsOpen && (
+        <SettingsPanel render={renderRes} onRenderChange={setRenderRes} />
+      )}
 
       {meterPanelOpen && (
         <AudioMeterPanel

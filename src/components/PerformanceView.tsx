@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import type {
   AudioBand,
   AutEffectKey,
@@ -10,7 +10,49 @@ import type {
 } from '../types';
 import { SCENE_LETTERS, slotIndex } from '../lib/channels';
 import type { PerformanceState } from '../hooks/usePerformanceState';
+import { useFullscreen } from '../hooks/useFullscreen';
 import { Knob } from './Knob';
+
+// The performance UI is laid out at this fixed design size (matching the target
+// 5" 1280×720 touchscreen) and uniformly scaled to fill whatever display it
+// runs on — so proportions and touch targets stay consistent everywhere.
+const BASE_W = 1280;
+const BASE_H = 720;
+
+// Uniform scale factor that fits the BASE_W×BASE_H design into the viewport
+// (letterboxed on a non-16:9 screen). Recomputed on resize / fullscreen toggle.
+function usePerfScale(): number {
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const compute = () => {
+      const s = Math.min(window.innerWidth / BASE_W, window.innerHeight / BASE_H);
+      setScale(s > 0 ? s : 1);
+    };
+    compute();
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, []);
+  return scale;
+}
+
+function FullscreenIcon({ exit }: { exit: boolean }) {
+  const d = exit ? 'M9 3v6H3M21 9h-6V3M3 15h6v6M15 21v-6h6' : 'M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6';
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={d} />
+    </svg>
+  );
+}
 
 // Curated quick-FX set for the cramped touchscreen — a useful subset of the
 // full studio filter list (DeckModule), not all 13. `id`s match the engine.
@@ -58,6 +100,8 @@ export function PerformanceView({ perf, decks, onCueDeck, onExit, aRef, bRef }: 
   // Which scene the controls + deck-cueing target. Defaults to B as the
   // "standby" side you prep before transitioning in.
   const [activeScene, setActiveScene] = useState(1);
+  const scale = usePerfScale();
+  const { isFullscreen, toggle: toggleFullscreen } = useFullscreen();
   const xf = perf.crossfade;
   const liveScene = xf < 0.5 ? 0 : 1;
 
@@ -72,7 +116,16 @@ export function PerformanceView({ perf, decks, onCueDeck, onExit, aRef, bRef }: 
   const cueHoverBorder = activeScene === 1 ? 'hover:border-fuchsia-400' : 'hover:border-cyan-400';
 
   return (
-    <div className="relative h-screen w-screen select-none overflow-hidden bg-black text-neutral-100">
+    <div className="fixed inset-0 flex items-center justify-center overflow-hidden bg-black">
+      <div
+        style={{
+          width: BASE_W,
+          height: BASE_H,
+          transform: `scale(${scale})`,
+          transformOrigin: 'center center',
+        }}
+        className="relative shrink-0 select-none overflow-hidden bg-black text-neutral-100"
+      >
       {/* Live program monitor: scene A under scene B, B faded by the crossfader.
           Anchored top at a fixed 16:9 so the deck aspect the engine derives from
           this canvas stays the output shape. */}
@@ -106,6 +159,15 @@ export function PerformanceView({ perf, decks, onCueDeck, onExit, aRef, bRef }: 
                 {SCENE_LETTERS[s]}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => void toggleFullscreen()}
+              className="ml-1 flex h-7 items-center justify-center rounded bg-white/10 px-2.5 text-neutral-200 transition-colors hover:bg-cyan-600 hover:text-white"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              <FullscreenIcon exit={isFullscreen} />
+            </button>
             <button
               type="button"
               onClick={onExit}
@@ -221,6 +283,7 @@ export function PerformanceView({ perf, decks, onCueDeck, onExit, aRef, bRef }: 
             </div>
           </section>
         </div>
+      </div>
       </div>
     </div>
   );

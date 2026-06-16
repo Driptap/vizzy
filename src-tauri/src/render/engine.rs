@@ -233,10 +233,33 @@ pub fn render_start(
     let adapter = tauri::async_runtime::block_on(
         instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
     )
-    .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
-    let (device, queue) =
-        tauri::async_runtime::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .map_err(|e| format!("GPU device request failed: {e}"))?;
+    .map_err(|e| {
+        let msg = format!("no compatible GPU adapter: {e}");
+        eprintln!("[vizzy render] {msg}");
+        msg
+    })?;
+    let info = adapter.get_info();
+    eprintln!(
+        "[vizzy render] adapter: {} | backend {:?} | driver {} {}",
+        info.name, info.backend, info.driver, info.driver_info
+    );
+    // Request only the limits this adapter actually advertises. Desktop GPUs
+    // meet wgpu's default tier, but lower-power GPUs (e.g. the Raspberry Pi 5's
+    // V3D, whose max 2D texture is 4096) do not — DeviceDescriptor::default()
+    // asks for the desktop tier, so request_device fails outright and the
+    // engine never starts. Clamping to adapter.limits() lets it come up there;
+    // the per-pass code already clamps texture sizes to device limits.
+    let (device, queue) = tauri::async_runtime::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        },
+    ))
+    .map_err(|e| {
+        let msg = format!("GPU device request failed: {e}");
+        eprintln!("[vizzy render] {msg}");
+        msg
+    })?;
     // Late validation errors (e.g. a deck shader misbehaving at draw time)
     // must never abort the process.
     device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
@@ -670,6 +693,21 @@ pub(crate) fn pack_size(w: u32, h: u32) -> u64 {
 
 fn unpack_size(packed: u64) -> (u32, u32) {
     ((packed >> 32) as u32, packed as u32)
+}
+
+/// Clamp a render size to an optional max box, scaling uniformly so the aspect
+/// ratio is preserved and never upscaling. `cap_w`/`cap_h` of 0 (either axis)
+/// means uncapped — the size passes through unchanged.
+fn cap_render_size(w: u32, h: u32, cap_w: u32, cap_h: u32) -> (u32, u32) {
+    if cap_w == 0 || cap_h == 0 || w == 0 || h == 0 {
+        return (w, h);
+    }
+    let scale = (cap_w as f32 / w as f32)
+        .min(cap_h as f32 / h as f32)
+        .min(1.0);
+    let cw = ((w as f32 * scale).round() as u32).max(1);
+    let ch = ((h as f32 * scale).round() as u32).max(1);
+    (cw, ch)
 }
 
 impl MasterOut {
@@ -3375,11 +3413,15 @@ fn render_loop(
         }
 
         core.ensure_aspect(evaluated.aspect);
-        // The offscreen master follows the window size when one is open.
+        // The offscreen master follows the window size when one is open, then
+        // is clamped to the optional render-resolution cap. The surface stays
+        // at native size (MasterOut::acquire reads m.size), so the present
+        // blit stretches the capped target back up — see cap_render_size.
         let (mw, mh) = master
             .as_ref()
             .map(|m| unpack_size(m.size.load(Ordering::Relaxed)))
             .unwrap_or(DEFAULT_MASTER_SIZE);
+        let (mw, mh) = cap_render_size(mw, mh, msg.render_max_w, msg.render_max_h);
         core.ensure_master_size(mw, mh);
         let scene = (frame % 2) as u32;
         let channel = (frame % 4) as u32;
@@ -3473,6 +3515,21 @@ fn render_loop(
 mod tests {
     use super::*;
     use wgpu::naga;
+
+    #[test]
+    fn cap_render_size_preserves_aspect_and_never_upscales() {
+        // uncapped (0 on either axis) passes through
+        assert_eq!(cap_render_size(1920, 1080, 0, 0), (1920, 1080));
+        assert_eq!(cap_render_size(1920, 1080, 1280, 0), (1920, 1080));
+        // 16:9 window capped to a 16:9 box → exact fit
+        assert_eq!(cap_render_size(1920, 1080, 1280, 720), (1280, 720));
+        // smaller-than-cap never upscales
+        assert_eq!(cap_render_size(800, 450, 1280, 720), (800, 450));
+        // a taller (16:10) window scales uniformly to fit the box, keeping aspect
+        let (w, h) = cap_render_size(1920, 1200, 1280, 720);
+        assert!(h <= 720 && w <= 1280);
+        assert!(((w as f32 / h as f32) - (1920.0 / 1200.0)).abs() < 0.01);
+    }
 
     #[test]
     fn frame_event_serializes_to_contract_shape() {

@@ -40,6 +40,18 @@ function createBrowserPlatform(): Platform {
     saveFileDialog: async () => null,
     onFileDrop: () => () => {},
     onMenuAction: () => () => {},
+    window: {
+      isFullscreen: async () => Boolean(document.fullscreenElement),
+      setFullscreen: async (on) => {
+        if (on) await document.documentElement.requestFullscreen?.();
+        else if (document.fullscreenElement) await document.exitFullscreen?.();
+      },
+      onFullscreenChange: (cb) => {
+        const handler = () => cb(Boolean(document.fullscreenElement));
+        document.addEventListener('fullscreenchange', handler);
+        return () => document.removeEventListener('fullscreenchange', handler);
+      },
+    },
     ollama: {
       status: unavailable,
       install: unavailable,

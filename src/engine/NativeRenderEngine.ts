@@ -129,6 +129,10 @@ export class NativeRenderEngine {
   private xfade = 0;
   private cueScene = 0;
   private bpm = 120;
+  // Optional master render-resolution cap (0 = uncapped). Stretched to the
+  // output surface by the native present blit — a perf lever for weak GPUs.
+  private renderMaxW = 0;
+  private renderMaxH = 0;
 
   private running = true;
   private dirty = false;
@@ -263,6 +267,8 @@ export class NativeRenderEngine {
       cueScene: this.cueScene,
       bpm: this.bpm,
       slots: this.slots,
+      renderMaxW: this.renderMaxW,
+      renderMaxH: this.renderMaxH,
     };
   }
 
@@ -354,6 +360,14 @@ export class NativeRenderEngine {
 
   setBpm(bpm: number): void {
     this.bpm = bpm;
+    this.markDirty();
+  }
+
+  /** Cap the master render resolution (px). Pass (0, 0) to render at native
+   *  output size. The engine preserves aspect and stretches to the surface. */
+  setRenderCap(width: number, height: number): void {
+    this.renderMaxW = Math.max(0, Math.round(width));
+    this.renderMaxH = Math.max(0, Math.round(height));
     this.markDirty();
   }
 

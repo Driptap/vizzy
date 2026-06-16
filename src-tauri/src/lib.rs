@@ -38,6 +38,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let save = MenuItemBuilder::with_id("menu_save_workspace", "Save Workspace As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    let reset_rig = MenuItemBuilder::with_id("menu_reset_rig", "Reset Rig").build(app)?;
     let reset = MenuItemBuilder::with_id("menu_reset_app", "Reset App…").build(app)?;
     let check_updates =
         MenuItemBuilder::with_id("menu_check_updates", "Check for Updates…").build(app)?;
@@ -70,6 +71,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             .item(&open)
             .item(&save)
             .separator()
+            .item(&reset_rig)
             .item(&reset)
             .separator()
             .close_window()
@@ -94,6 +96,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             .item(&open)
             .item(&save)
             .separator()
+            .item(&reset_rig)
             .item(&reset)
             .item(&check_updates)
             .separator()
@@ -101,6 +104,20 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             .build()?;
         MenuBuilder::new(app).item(&file).item(&edit).build()
     }
+}
+
+// Fullscreen the window that invoked the command (the main/performance window).
+// Mirrors render_master_fullscreen but targets the calling window, so the
+// performance UI can go edge-to-edge on a touchscreen. App-defined commands need
+// no capability entry, unlike the frontend window API.
+#[tauri::command]
+fn window_set_fullscreen(window: tauri::Window, on: bool) -> Result<(), String> {
+    window.set_fullscreen(on).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_is_fullscreen(window: tauri::Window) -> Result<bool, String> {
+    window.is_fullscreen().map_err(|e| e.to_string())
 }
 
 pub fn run() {
@@ -165,6 +182,7 @@ pub fn run() {
                 "menu_open_workspace" => "open-workspace",
                 "menu_save_workspace" => "save-workspace",
                 "menu_reset_app" => "reset-app",
+                "menu_reset_rig" => "reset-rig",
                 "menu_check_updates" => "check-updates",
                 _ => return,
             };
@@ -193,6 +211,8 @@ pub fn run() {
             render::engine::render_glow,
             render::window::render_master,
             render::window::render_master_fullscreen,
+            window_set_fullscreen,
+            window_is_fullscreen,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Vizzy")

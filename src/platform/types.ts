@@ -82,6 +82,16 @@ export interface Platform {
    * an unsubscribe. A no-op in the browser (no native menu).
    */
   onMenuAction(cb: (action: string) => void): () => void;
+  /** Host window controls (the app's own window). */
+  window: {
+    isFullscreen(): Promise<boolean>;
+    setFullscreen(on: boolean): Promise<void>;
+    /**
+     * Fires when the window's fullscreen state may have changed (toggled here,
+     * or by the OS/WM via Esc). Returns an unsubscribe.
+     */
+    onFullscreenChange(cb: (on: boolean) => void): () => void;
+  };
   ollama: {
     status(): Promise<OllamaStatus>;
     install(onProgress: (p: OllamaProgress) => void): Promise<void>;

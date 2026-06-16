@@ -61,6 +61,16 @@ describe('render_state payload', () => {
     engine.dispose();
   });
 
+  it('carries the render-resolution cap, defaulting to uncapped', () => {
+    const engine = makeEngine();
+    expect(engine.statePayload()).toMatchObject({ renderMaxW: 0, renderMaxH: 0 });
+    engine.setRenderCap(1280, 720);
+    expect(engine.statePayload()).toMatchObject({ renderMaxW: 1280, renderMaxH: 720 });
+    engine.setRenderCap(0, 0);
+    expect(engine.statePayload()).toMatchObject({ renderMaxW: 0, renderMaxH: 0 });
+    engine.dispose();
+  });
+
   it('passes loops and AUT config through verbatim', () => {
     const engine = makeEngine();
     const loop = {

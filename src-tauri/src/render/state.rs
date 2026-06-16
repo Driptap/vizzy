@@ -15,6 +15,12 @@ pub struct RenderStateMsg {
     pub bpm: f32,
     /// Up to 8 slots; missing entries read as `SlotState::default()`.
     pub slots: Vec<SlotState>,
+    /// Optional cap on the master *render* resolution: the offscreen master
+    /// target is rendered no larger than this box (aspect preserved) and the
+    /// window present blit stretches it back to native size — a performance
+    /// lever for low-power GPUs. 0 on either axis = uncapped (the default).
+    pub render_max_w: u32,
+    pub render_max_h: u32,
 }
 
 impl Default for RenderStateMsg {
@@ -25,6 +31,8 @@ impl Default for RenderStateMsg {
             cue_scene: 0,
             bpm: 120.0,
             slots: Vec::new(),
+            render_max_w: 0,
+            render_max_h: 0,
         }
     }
 }
