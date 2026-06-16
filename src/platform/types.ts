@@ -64,6 +64,13 @@ export interface Platform {
    * reports absolute paths here instead. Returns an unsubscribe.
    */
   onFileDrop(cb: (paths: string[]) => void): () => void;
+  /**
+   * Native application-menu subscription: the OS File menu (built in
+   * src-tauri) emits a short action id — 'open-workspace', 'save-workspace',
+   * 'reset-app' — which the renderer maps to its workspace handlers. Returns
+   * an unsubscribe. A no-op in the browser (no native menu).
+   */
+  onMenuAction(cb: (action: string) => void): () => void;
   ollama: {
     status(): Promise<OllamaStatus>;
     install(onProgress: (p: OllamaProgress) => void): Promise<void>;

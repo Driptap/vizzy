@@ -30,8 +30,6 @@ function StatusDot({ on }: { on: boolean }) {
 interface TopBarProps {
   libraryOpen: boolean;
   onToggleLibrary: () => void;
-  onOpenWorkspace: () => void;
-  onSaveWorkspace: () => void;
   masterOpen: boolean;
   onToggleMaster: () => void;
   perfOpen: boolean;
@@ -65,8 +63,6 @@ interface TopBarProps {
 export function TopBar({
   libraryOpen,
   onToggleLibrary,
-  onOpenWorkspace,
-  onSaveWorkspace,
   masterOpen,
   onToggleMaster,
   perfOpen,
@@ -128,25 +124,6 @@ export function TopBar({
         <StatusDot on={libraryOpen} />
         Library
       </button>
-
-      <div className="flex items-center gap-1" title="Save or open a whole workspace — the entire library plus the current arrangement — as a portable .vizzy file you can move between computers">
-        <button
-          type="button"
-          onClick={onOpenWorkspace}
-          title="Open a .vizzy workspace file — replaces the current library and session on this computer"
-          className={`${TOGGLE_BASE} ${TOGGLE_OFF}`}
-        >
-          Open…
-        </button>
-        <button
-          type="button"
-          onClick={onSaveWorkspace}
-          title="Save the whole workspace (library + current arrangement) to a portable .vizzy file"
-          className={`${TOGGLE_BASE} ${TOGGLE_OFF}`}
-        >
-          Save As…
-        </button>
-      </div>
 
       <button
         type="button"

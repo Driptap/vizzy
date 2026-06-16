@@ -13,8 +13,12 @@ directly. Data is stored under `<userData>` = `~/Library/Application Support/com
   (the `.vizzy-seeded` first-run flag).
 - `storage.ts` — thin `localStorage` wrapper (`vizzy.` prefix). UI prefs only (e.g.
   `libraryOpen`, LLM `model`, MIDI bindings) — **not** persistence of library/session.
-- `exampleSeed.ts` — first-run example content + `dedupeExampleEntries` (cleans duplicate
-  example entries left by earlier re-seed bugs). `EXAMPLE_DECK_NAME = 'Example Deck'`.
+- `exampleSeed.ts` — first-run example content (16 shader patches, 4 fly-through scenes, 5
+  canvas sprites, 4 STL models, and 10 `Example · …` deck presets, each showcasing a feature)
+  + `dedupeExampleEntries` (cleans duplicate example entries left by earlier re-seed bugs).
+  All entry names are `Example · …`; `EXAMPLE_DECK_NAME = 'Example · Welcome'` is the deck
+  assigned to scene 0 and the seed sentinel. `EXAMPLE_NAMES` is derived from the content
+  arrays, so adding content keeps the dedupe set correct automatically.
 - `sourceStaging.ts` — re-stage a slot's source onto the engine on restore (`resolveSourceRef`
   + `stageSource`). Other files: `patches.ts`, `sceneGenerator.ts`, `channels.ts` (SLOTS),
   `expr.ts`, `loopControls.ts`, `spriteLoader.ts`, `assetTypes.ts`, `llmJson.ts`.
@@ -24,8 +28,8 @@ directly. Data is stored under `<userData>` = `~/Library/Application Support/com
 listShaders() → dedupe → entries
 session = loadSavedSession()
   if session:   setLibrary(entries); await restoreSession(session, entries)   ← always wins
-  else:         alreadySeeded = hasSeededMarker() || entries has an "Example Deck"
-                if NOT seeded: seedExampleLibrary(); assign example deck to scene 0
+  else:         alreadySeeded = hasSeededMarker() || entries has the EXAMPLE_DECK_NAME deck
+                if NOT seeded: seedExampleLibrary(); assign welcome deck to scene 0
                 setLibrary(entries)
 writeSeededMarker()                  ← idempotent; heals installs with no marker yet
 finally: markSessionReady()          ← enables autosave (runs AFTER the awaited restore)

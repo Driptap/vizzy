@@ -10,9 +10,11 @@ import {
   renameShader,
   updateEntry,
   deleteEntry,
+  clearLibrary,
   hasSeededMarker,
   writeSeededMarker,
 } from '../lib/shaderLibrary';
+import { clearSession } from '../lib/session';
 import { makeSpriteThumbnail } from '../lib/spriteLoader';
 import { MODEL_EXTENSIONS, SPRITE_EXTENSIONS, VIDEO_EXTENSIONS } from '../lib/assetTypes';
 import { exportWorkspace, readWorkspaceFile, replaceWorkspace, type ExportProgress } from '../lib/workspaceIO';
@@ -432,6 +434,36 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     }
   }, [suspendAutosave, restoreSession, markSessionReady, engineRef, perf]);
 
+  // Reset to out-of-the-box: wipe the user's library + session and re-seed the
+  // bundled example content, exactly as a genuine first launch would. Fully
+  // destructive (Save As… first to keep anything), so it confirms. Autosave is
+  // gated across the swap like boot/import, and the engine is reset to the
+  // default rig before the welcome deck is staged onto scene 0.
+  const handleResetToDefaults = useCallback(async () => {
+    const confirmed = window.confirm(
+      'Reset Vizzy to its out-of-the-box state?\n\nThis deletes your entire library and current arrangement on this computer and reloads the bundled examples. Anything not saved to a .vizzy file will be lost.',
+    );
+    if (!confirmed) return;
+    try {
+      suspendAutosave();
+      await clearLibrary();
+      await clearSession();
+      engineRef.current?.resetAllDecks();
+      perf.resetPerformance();
+      const { deck, entries } = await seedExampleLibrary();
+      setLibrary(entries);
+      assignDeckEntry(deck, 0, entries);
+      // keep the marker so the next boot restores this seeded session instead
+      // of seeding a second time
+      await writeSeededMarker();
+    } catch (err) {
+      console.error('[Vizzy] Reset to defaults failed:', err);
+      window.alert(`Couldn't reset Vizzy: ${(err as Error).message}`);
+    } finally {
+      markSessionReady(); // never leave autosave wedged off
+    }
+  }, [suspendAutosave, assignDeckEntry, markSessionReady, engineRef, perf]);
+
   // Boot: load the library; on first launch seed the example content, then
   // restore the previous session if there is one. A saved session always wins
   // over the example deck so reopening the app puts you back where you were —
@@ -493,6 +525,7 @@ export function useLibrary({ engineRef, perf, restoreSession, loadSavedSession, 
     handleRenameShader,
     handleExportWorkspace,
     handleImportWorkspace,
+    handleResetToDefaults,
     exportProgress,
   };
 }

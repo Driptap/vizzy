@@ -21,6 +21,7 @@ import { useAudioControls } from './hooks/useAudioControls';
 import { useAudioMeters } from './hooks/useAudioMeters';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
 import { useLibrary, isShaderEntry } from './hooks/useLibrary';
+import { getPlatform } from './platform';
 
 export default function App() {
   const sceneACanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -141,6 +142,17 @@ export default function App() {
     flushSession: session.flushSession,
   });
 
+  // Native File menu (built in src-tauri): the OS menu items emit actions the
+  // host forwards here, driving the same workspace handlers the UI used to.
+  const { handleImportWorkspace, handleExportWorkspace, handleResetToDefaults } = library;
+  useEffect(() => {
+    return getPlatform().onMenuAction((action) => {
+      if (action === 'open-workspace') void handleImportWorkspace();
+      else if (action === 'save-workspace') void handleExportWorkspace();
+      else if (action === 'reset-app') void handleResetToDefaults();
+    });
+  }, [handleImportWorkspace, handleExportWorkspace, handleResetToDefaults]);
+
   // Saved decks the performance view can cue, and the cue handler (loads a deck
   // onto a scene's 4 channels via the existing library path).
   const perfDecks = library.library.filter((e): e is DeckEntry => e.kind === 'deck');
@@ -191,8 +203,6 @@ export default function App() {
       <TopBar
         libraryOpen={library.libraryOpen}
         onToggleLibrary={library.handleToggleLibrary}
-        onOpenWorkspace={library.handleImportWorkspace}
-        onSaveWorkspace={library.handleExportWorkspace}
         masterOpen={master.masterOpen}
         onToggleMaster={master.handleToggleMaster}
         perfOpen={performanceMode}

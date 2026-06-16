@@ -4,6 +4,7 @@ vi.mock('./shaderLibrary', () => {
   let n = 0;
   return {
     saveShader: vi.fn(async (data) => ({ id: `shader-${++n}`, createdAt: n, ...data })),
+    saveScene: vi.fn(async (data) => ({ id: `scene-${++n}`, kind: 'scene', createdAt: n, ...data })),
     saveDeck: vi.fn(async (data) => ({ id: `deck-${++n}`, kind: 'deck', createdAt: n, ...data })),
     saveAssetFromBuffer: vi.fn(async ({ kind, ...data }) => ({
       id: `${kind}-${++n}`,
@@ -16,7 +17,7 @@ vi.mock('./shaderLibrary', () => {
 });
 
 import { dedupeExampleEntries, seedExampleLibrary, EXAMPLE_DECK_NAME } from './exampleSeed';
-import { saveShader, saveDeck, saveAssetFromBuffer, deleteEntry } from './shaderLibrary';
+import { saveShader, saveScene, saveDeck, saveAssetFromBuffer, deleteEntry } from './shaderLibrary';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -60,57 +61,73 @@ describe('dedupeExampleEntries', () => {
 });
 
 describe('seedExampleLibrary', () => {
-  it('creates 2 shaders, a sprite, 2 models and the deck preset', async () => {
+  it('creates the full example library (16 shaders, 4 scenes, 5 sprites, 4 models, 10 decks)', async () => {
     const { deck, entries } = await seedExampleLibrary();
 
-    expect(saveShader).toHaveBeenCalledTimes(2);
-    expect(saveAssetFromBuffer).toHaveBeenCalledTimes(3); // star sprite, torus, vapor terrain
-    expect(saveDeck).toHaveBeenCalledTimes(1);
+    expect(saveShader).toHaveBeenCalledTimes(16);
+    expect(saveScene).toHaveBeenCalledTimes(4);
+    expect(saveAssetFromBuffer).toHaveBeenCalledTimes(9); // 5 sprites + 4 models
+    expect(saveDeck).toHaveBeenCalledTimes(10);
 
     expect(deck.name).toBe(EXAMPLE_DECK_NAME);
-    expect(entries).toHaveLength(6);
-    expect(entries[0]).toBe(deck); // newest-first, deck on top
+    expect(entries).toHaveLength(16 + 4 + 9 + 10);
+    expect(entries[0]).toBe(deck); // newest-first, primary deck on top
   });
 
-  it('wires the deck channels to the saved entry ids', async () => {
+  it('wires the welcome deck channels to saved entry ids', async () => {
     const { deck, entries } = await seedExampleLibrary();
-    const byKind = Object.groupBy
-      ? Object.groupBy(entries, (e) => e.kind ?? 'shader')
-      : entries.reduce((acc, e) => {
-          const k = e.kind ?? 'shader';
-          (acc[k] ??= []).push(e);
-          return acc;
-        }, {});
-
+    const byName = (name) => entries.find((e) => e.name === name);
     const [ch1, ch2, ch3, ch4] = deck.channels;
-    const torus = entries.find((e) => e.name === 'Example · Torus');
-    expect(byKind.shader.map((e) => e.id)).toContain(ch1.shaderId);
-    expect(byKind.sprite[0].id).toBe(ch2.spriteId);
-    expect(ch3.modelId).toBe(torus.id);
-    expect(byKind.shader.map((e) => e.id)).toContain(ch4.shaderId);
-    expect(ch1.shaderId).not.toBe(ch4.shaderId);
+    expect(ch1.shaderId).toBe(byName('Example · Plasma Flow').id);
+    expect(ch2.shaderId).toBe(byName('Example · Neon Rings').id);
+    expect(ch3.modelId).toBe(byName('Example · Torus').id);
+    expect(ch4.spriteId).toBe(byName('Example · Neon Star').id);
+  });
+
+  it('every deck channel references an id that exists in the library', async () => {
+    const { entries } = await seedExampleLibrary();
+    const ids = new Set(entries.map((e) => e.id));
+    const decks = entries.filter((e) => e.kind === 'deck');
+    expect(decks).toHaveLength(10);
+    decks.forEach((d) => {
+      d.channels.forEach((ch) => {
+        const ref =
+          ch.shaderId ?? ch.spriteId ?? ch.modelId ?? ch.landscapeId ?? ch.sceneId ?? ch.videoId;
+        expect(ref, `${d.name} channel ref`).toBeTruthy();
+        expect(ids.has(ref)).toBe(true);
+      });
+    });
   });
 
   it('every channel carries the full config shape', async () => {
-    const { deck } = await seedExampleLibrary();
-    deck.channels.forEach((ch) => {
-      expect(ch).toMatchObject({
-        size: { x: expect.any(Number), y: expect.any(Number) },
-        fx: expect.objectContaining({ band: expect.any(String), contrast: expect.any(Number) }),
-      });
-      expect(Object.keys(ch.aut).sort()).toEqual(['dst', 'flk', 'rot', 'scl', 'skw', 'tlt']);
-      expect(ch.opacity).toBeGreaterThanOrEqual(0);
-    });
-    // channel 1 starts audible so the seeded deck is visible immediately
-    expect(deck.channels[0].opacity).toBe(1);
+    const { entries } = await seedExampleLibrary();
+    const decks = entries.filter((e) => e.kind === 'deck');
+    decks.forEach((d) =>
+      d.channels.forEach((ch) => {
+        expect(ch).toMatchObject({
+          size: { x: expect.any(Number), y: expect.any(Number) },
+          fx: expect.objectContaining({ band: expect.any(String), contrast: expect.any(Number) }),
+        });
+        expect(Object.keys(ch.aut).sort()).toEqual(['dst', 'flk', 'rot', 'scl', 'skw', 'tlt']);
+        expect(ch.opacity).toBeGreaterThanOrEqual(0);
+      }),
+    );
+    // the welcome deck's channel 1 starts audible so first launch is visible
+    const welcome = decks.find((d) => d.name === EXAMPLE_DECK_NAME);
+    expect(welcome.channels[0].opacity).toBe(1);
   });
 
-  it('the seeded torus and vapor terrain are valid binary STLs', async () => {
+  it('the seeded models are valid binary STLs', async () => {
     await seedExampleLibrary();
     const stlCalls = saveAssetFromBuffer.mock.calls
       .map(([arg]) => arg)
       .filter((arg) => arg.kind === 'model');
-    expect(stlCalls.map((c) => c.name)).toEqual(['Example · Torus', 'Example · Vapor Terrain']);
+    expect(stlCalls.map((c) => c.name)).toEqual([
+      'Example · Torus',
+      'Example · Sphere',
+      'Example · Spike Ball',
+      'Example · Vapor Terrain',
+    ]);
 
     stlCalls.forEach((call) => {
       expect(call.ext).toBe('.stl');
@@ -119,8 +136,16 @@ describe('seedExampleLibrary', () => {
       expect(call.bytes.byteLength).toBe(84 + triCount * 50);
     });
 
-    const [torus, terrain] = stlCalls;
+    const torus = stlCalls.find((c) => c.name === 'Example · Torus');
+    const terrain = stlCalls.find((c) => c.name === 'Example · Vapor Terrain');
     expect(new DataView(torus.bytes.buffer).getUint32(80, true)).toBe(48 * 24 * 2);
     expect(new DataView(terrain.bytes.buffer).getUint32(80, true)).toBe(56 * 42 * 2);
+  });
+
+  it('seeds procedural scenes with the example prefix', async () => {
+    await seedExampleLibrary();
+    const names = saveScene.mock.calls.map(([arg]) => arg.name);
+    expect(names).toContain('Example · Wormhole');
+    expect(names.every((n) => n.startsWith('Example · '))).toBe(true);
   });
 });

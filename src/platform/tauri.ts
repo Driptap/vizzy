@@ -86,6 +86,18 @@ export function createTauriPlatform(): Platform {
         unlisten?.();
       };
     },
+    onMenuAction: (cb) => {
+      let unlisten: UnlistenFn | null = null;
+      let cancelled = false;
+      listen<string>('vizzy://menu', (e) => cb(e.payload)).then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+      return () => {
+        cancelled = true;
+        unlisten?.();
+      };
+    },
     ollama: {
       status: () => invoke('ollama_status'),
       install: async (onProgress) => {

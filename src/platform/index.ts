@@ -38,6 +38,7 @@ function createBrowserPlatform(): Platform {
     pickFiles: async () => null,
     saveFileDialog: async () => null,
     onFileDrop: () => () => {},
+    onMenuAction: () => () => {},
     ollama: {
       status: unavailable,
       install: unavailable,
